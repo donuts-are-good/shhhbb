@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/base64"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -9,11 +10,21 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"unicode"
 
 	"golang.org/x/crypto/sha3"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/term"
 )
+
+var users = make(map[string]*user)
+var usersMutex sync.Mutex
+
+type user struct {
+	pubkey string
+	hash   string
+	conn   ssh.Channel
+}
 
 func configureSSHServer(privateKeyPath string) (*ssh.ServerConfig, error) {
 	privateKeyBytes, err := os.ReadFile(privateKeyPath)
@@ -37,15 +48,6 @@ func configureSSHServer(privateKeyPath string) (*ssh.ServerConfig, error) {
 	config.AddHostKey(privateKey)
 	return config, nil
 }
-
-var users = make(map[string]*user)
-var usersMutex sync.Mutex // Add a mutex to manage concurrent access to users
-type user struct {
-	pubkey string
-	hash   string
-	conn   ssh.Channel
-}
-
 func addUser(hash string, u *user) {
 	usersMutex.Lock()
 	defer usersMutex.Unlock()
@@ -120,7 +122,6 @@ func main() {
 					fmt.Println("Error accepting channel:", err.Error())
 					return
 				}
-				// defer channel.Close()
 				go handleConnection(channel, sshConn, requests)
 			}
 		}(conn)
@@ -129,7 +130,7 @@ func main() {
 func generateHash(pubkey string) string {
 	h := sha3.NewShake256()
 	h.Write([]byte(pubkey))
-	checksum := make([]byte, 8)
+	checksum := make([]byte, 16)
 	h.Read(checksum)
 	return base64.StdEncoding.EncodeToString(checksum)
 }
@@ -141,19 +142,33 @@ func broadcast(message string) {
 		fmt.Fprintln(user.conn, "\r\n"+message)
 	}
 }
+
+func cleanString(dirtyString string) (string, error) {
+	var clean strings.Builder
+	for _, r := range dirtyString {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			clean.WriteRune(r)
+		}
+	}
+
+	if clean.Len() < 8 {
+		return "", errors.New("not enough characters after cleaning")
+	}
+
+	return clean.String()[:8], nil
+}
 func sendMessage(senderHash, recipientHash, message string, term *term.Terminal) {
 	usersMutex.Lock()
 	recipient, ok := users[recipientHash]
 	usersMutex.Unlock()
 	if !ok {
-		fmt.Fprintf(users[senderHash].conn, "User with hash %s not found\n", recipientHash)
+		fmt.Fprintf(users[senderHash].conn, "\n\rUser with hash %s not found\n", recipientHash)
 		return
 	}
-	message = "\n[DirectMessage][" + senderHash + "]> " + message
+	message = "\r\n[DirectMessage][" + senderHash + "]> " + message + "\r\n"
 	fmt.Fprintln(recipient.conn, message)
 	term.Write([]byte(message))
 }
-
 func handleConnection(channel ssh.Channel, sshConn *ssh.ServerConn, requests <-chan *ssh.Request) {
 	defer channel.Close()
 	if sshConn.Permissions == nil || sshConn.Permissions.Extensions == nil {
@@ -165,15 +180,16 @@ func handleConnection(channel ssh.Channel, sshConn *ssh.ServerConn, requests <-c
 		fmt.Fprintln(channel, "Unable to retrieve your public key.")
 		return
 	}
-	hash := generateHash(pubkey)
+makeUsername:
+	hash, err := cleanString(generateHash(pubkey))
+	if err != nil {
+		goto makeUsername // yolo, im not sorry for using goto
+	}
+	hash = "@" + hash
 	addUser(hash, &user{pubkey: pubkey, hash: hash, conn: channel})
 	term := term.NewTerminal(channel, "\r\n> ")
 	welcome := `
-                         
-	
 
-           BB           BB           BB           BB           BB           
-           BB           BB           BB           BB           BB           
            BB           BB           BB           BB           BB           
 ,adPPYba,  BB,dPPYba,   BB,dPPYba,   BB,dPPYba,   BB,dPPYba,   BB,dPPYba,   
 I8[    ""  BBP'    "8a  BBP'    "8a  BBP'    "8a  BBP'    "8a  BBP'    "8a  
@@ -188,10 +204,11 @@ aa    ]8I  BB       BB  BB       BB  BB       BB  BBb,   ,a8"  BBb,   ,a8"
   - no logs are kept              - collaborate & share
   - have fun :)                   - evolve
 
-`
+Say hello and press [enter] to chat
 
+`
 	term.Write([]byte(welcome))
-	term.Write([]byte("Your pubkey hash is " + hash + "\nType /help for help.\n\n"))
+	term.Write([]byte("You are " + hash + "\nType /help for help.\n\n"))
 	for {
 		input, err := term.ReadLine()
 		if err != nil {
@@ -207,19 +224,8 @@ aa    ]8I  BB       BB  BB       BB  BB       BB  BBb,   ,a8"  BBb,   ,a8"
 		}
 		if strings.HasPrefix(input, "/help") {
 			writeHelpMenu(term)
-			// term.Write([]byte("Available commands:\n"))
-			// term.Write([]byte("/help\t- show this help message\n"))
-			// term.Write([]byte("/pubkey\t- show your pubkey hash\n"))
-			// term.Write([]byte("/users\t- list all connected users\n"))
-			// term.Write([]byte("/message <user hash> <body>\t- send a direct message to a user\n"))
 		} else if strings.HasPrefix(input, "/users") {
 			writeUsersOnline(term)
-			// term.Write([]byte("Connected users:\n"))
-			// for _, user := range users {
-			// 	term.Write([]byte("- "))
-			// 	term.Write([]byte(user.hash))
-			// 	term.Write([]byte("\n"))
-			// }
 		} else if strings.HasPrefix(input, "/pubkey") {
 			term.Write([]byte("Your pubkey hash: " + hash + "\n"))
 		} else if strings.HasPrefix(input, "/message") {
@@ -233,24 +239,18 @@ aa    ]8I  BB       BB  BB       BB  BB       BB  BBb,   ,a8"  BBb,   ,a8"
 			sendMessage(hash, recipientHash, message, term)
 		} else {
 			message := fmt.Sprintf("[%s]: %s", hash, input)
-			broadcast(message + "\r")
+			if len(input) > 0 || !strings.HasPrefix(input, "/") {
+				broadcast(message + "\r")
+			}
 		}
 	}
 }
-
 func writeUsersOnline(term *term.Terminal) {
 	term.Write([]byte("Connected users:\n"))
 	for _, user := range users {
-		term.Write([]byte("- "))
-		term.Write([]byte(user.hash))
-		term.Write([]byte("\n"))
+		term.Write([]byte("- " + user.hash + "\n"))
 	}
 }
-
 func writeHelpMenu(term *term.Terminal) {
-	term.Write([]byte("Available commands:\n"))
-	term.Write([]byte("/help\t- show this help message\n"))
-	term.Write([]byte("/pubkey\t- show your pubkey hash\n"))
-	term.Write([]byte("/users\t- list all connected users\n"))
-	term.Write([]byte("/message <user hash> <body>\t- send a direct message to a user\n"))
+	term.Write([]byte("Available commands:\n/help\t- show this help message\n/pubkey\t- show your pubkey hash\n/users\t- list all connected users\n/message <user hash> <body>\t- send a direct message to a user\n"))
 }
