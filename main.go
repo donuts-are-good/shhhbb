@@ -138,7 +138,7 @@ func disconnect(hash string) {
 }
 func broadcast(message string) {
 	for _, user := range getAllUsers() {
-		fmt.Fprintln(user.conn, message)
+		fmt.Fprintln(user.conn, "\r\n"+message)
 	}
 }
 func sendMessage(senderHash, recipientHash, message string, term *term.Terminal) {
@@ -149,7 +149,7 @@ func sendMessage(senderHash, recipientHash, message string, term *term.Terminal)
 		fmt.Fprintf(users[senderHash].conn, "User with hash %s not found\n", recipientHash)
 		return
 	}
-	message = fmt.Sprintf("\n--DIRECT MESSAGE--\n-- From %s--\n%s\n-------------------\n", senderHash, message)
+	message = "\n[DirectMessage][" + senderHash + "]> " + message
 	fmt.Fprintln(recipient.conn, message)
 	term.Write([]byte(message))
 }
@@ -167,7 +167,7 @@ func handleConnection(channel ssh.Channel, sshConn *ssh.ServerConn, requests <-c
 	}
 	hash := generateHash(pubkey)
 	addUser(hash, &user{pubkey: pubkey, hash: hash, conn: channel})
-	term := term.NewTerminal(channel, "> ")
+	term := term.NewTerminal(channel, "\r\n> ")
 	welcome := `
                          
 	
@@ -206,18 +206,20 @@ aa    ]8I  BB       BB  BB       BB  BB       BB  BBb,   ,a8"  BBb,   ,a8"
 			return
 		}
 		if strings.HasPrefix(input, "/help") {
-			term.Write([]byte("Available commands:\n"))
-			term.Write([]byte("/help\t- show this help message\n"))
-			term.Write([]byte("/pubkey\t- show your pubkey hash\n"))
-			term.Write([]byte("/users\t- list all connected users\n"))
-			term.Write([]byte("/message <user hash> <body>\t- send a direct message to a user\n"))
+			writeHelpMenu(term)
+			// term.Write([]byte("Available commands:\n"))
+			// term.Write([]byte("/help\t- show this help message\n"))
+			// term.Write([]byte("/pubkey\t- show your pubkey hash\n"))
+			// term.Write([]byte("/users\t- list all connected users\n"))
+			// term.Write([]byte("/message <user hash> <body>\t- send a direct message to a user\n"))
 		} else if strings.HasPrefix(input, "/users") {
-			term.Write([]byte("Connected users:\n"))
-			for _, user := range users {
-				term.Write([]byte("- "))
-				term.Write([]byte(user.hash))
-				term.Write([]byte("\n"))
-			}
+			writeUsersOnline(term)
+			// term.Write([]byte("Connected users:\n"))
+			// for _, user := range users {
+			// 	term.Write([]byte("- "))
+			// 	term.Write([]byte(user.hash))
+			// 	term.Write([]byte("\n"))
+			// }
 		} else if strings.HasPrefix(input, "/pubkey") {
 			term.Write([]byte("Your pubkey hash: " + hash + "\n"))
 		} else if strings.HasPrefix(input, "/message") {
@@ -231,7 +233,24 @@ aa    ]8I  BB       BB  BB       BB  BB       BB  BBb,   ,a8"  BBb,   ,a8"
 			sendMessage(hash, recipientHash, message, term)
 		} else {
 			message := fmt.Sprintf("[%s]: %s", hash, input)
-			broadcast(message)
+			broadcast(message + "\r")
 		}
 	}
+}
+
+func writeUsersOnline(term *term.Terminal) {
+	term.Write([]byte("Connected users:\n"))
+	for _, user := range users {
+		term.Write([]byte("- "))
+		term.Write([]byte(user.hash))
+		term.Write([]byte("\n"))
+	}
+}
+
+func writeHelpMenu(term *term.Terminal) {
+	term.Write([]byte("Available commands:\n"))
+	term.Write([]byte("/help\t- show this help message\n"))
+	term.Write([]byte("/pubkey\t- show your pubkey hash\n"))
+	term.Write([]byte("/users\t- list all connected users\n"))
+	term.Write([]byte("/message <user hash> <body>\t- send a direct message to a user\n"))
 }
