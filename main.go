@@ -1,11 +1,13 @@
 package main
 
 import (
+	"container/list"
 	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"strings"
@@ -20,10 +22,30 @@ import (
 var users = make(map[string]*user)
 var usersMutex sync.Mutex
 
+var messageCache *list.List
+
 type user struct {
-	pubkey string
-	hash   string
-	conn   ssh.Channel
+	pubkey  string
+	hash    string
+	conn    ssh.Channel
+	ignored map[string]bool
+}
+
+func init() {
+	messageCache = list.New()
+}
+
+func addToCache(message string) {
+	messageCache.PushBack(message)
+	if messageCache.Len() > 100 {
+		messageCache.Remove(messageCache.Front())
+	}
+}
+
+func printCachedMessages(term *term.Terminal) {
+	for e := messageCache.Front(); e != nil; e = e.Next() {
+		term.Write([]byte(e.Value.(string) + "\r\n"))
+	}
 }
 
 func configureSSHServer(privateKeyPath string) (*ssh.ServerConfig, error) {
@@ -48,16 +70,20 @@ func configureSSHServer(privateKeyPath string) (*ssh.ServerConfig, error) {
 	config.AddHostKey(privateKey)
 	return config, nil
 }
+
 func addUser(hash string, u *user) {
 	usersMutex.Lock()
 	defer usersMutex.Unlock()
+	u.ignored = make(map[string]bool)
 	users[hash] = u
 }
+
 func removeUser(hash string) {
 	usersMutex.Lock()
 	defer usersMutex.Unlock()
 	delete(users, hash)
 }
+
 func getAllUsers() []*user {
 	usersMutex.Lock()
 	defer usersMutex.Unlock()
@@ -67,6 +93,7 @@ func getAllUsers() []*user {
 	}
 	return allUsers
 }
+
 func main() {
 	var privateKeyPath string
 	flag.StringVar(&privateKeyPath, "key", "./keys/ssh_host_ed25519_key", "Path to the private key")
@@ -137,9 +164,16 @@ func generateHash(pubkey string) string {
 func disconnect(hash string) {
 	removeUser(hash)
 }
+
 func broadcast(message string) {
+	addToCache(message)
+	log.Println("msg len: ", len(message))
+	log.Println("msg txt: ", message)
+	sender := message[1:9]
 	for _, user := range getAllUsers() {
-		fmt.Fprintln(user.conn, "\r\n"+message)
+		if _, ignored := user.ignored[sender]; !ignored {
+			fmt.Fprintln(user.conn, "\r\n"+message)
+		}
 	}
 }
 
@@ -157,6 +191,7 @@ func cleanString(dirtyString string) (string, error) {
 
 	return clean.String()[:8], nil
 }
+
 func sendMessage(senderHash, recipientHash, message string, term *term.Terminal) {
 	usersMutex.Lock()
 	recipient, ok := users[recipientHash]
@@ -165,10 +200,14 @@ func sendMessage(senderHash, recipientHash, message string, term *term.Terminal)
 		fmt.Fprintf(users[senderHash].conn, "\n\rUser with hash %s not found\n", recipientHash)
 		return
 	}
+	if recipient.ignored[senderHash] {
+		return
+	}
 	message = "\r\n[DirectMessage][" + senderHash + "]> " + message + "\r\n"
 	fmt.Fprintln(recipient.conn, message)
 	term.Write([]byte(message))
 }
+
 func handleConnection(channel ssh.Channel, sshConn *ssh.ServerConn, requests <-chan *ssh.Request) {
 	defer channel.Close()
 	if sshConn.Permissions == nil || sshConn.Permissions.Extensions == nil {
@@ -207,6 +246,7 @@ aa    ]8I  BB       BB  BB       BB  BB       BB  BBb,   ,a8"  BBb,   ,a8"
 Say hello and press [enter] to chat
 
 `
+	printCachedMessages(term)
 	term.Write([]byte(welcome))
 	term.Write([]byte("You are " + hash + "\nType /help for help.\n\n"))
 	for {
@@ -222,12 +262,38 @@ Say hello and press [enter] to chat
 			disconnect(hash)
 			return
 		}
-		if strings.HasPrefix(input, "/help") {
+		if strings.HasPrefix(input, "/ignore") {
+			parts := strings.Split(input, " ")
+			if len(parts) != 2 {
+				term.Write([]byte("Usage: /ignore <user hash>\n"))
+				continue
+			}
+			ignoredUser := parts[1]
+			users[hash].ignored[ignoredUser] = true
+			term.Write([]byte("User " + ignoredUser + " is now ignored.\n"))
+		} else if strings.HasPrefix(input, "/help") {
 			writeHelpMenu(term)
 		} else if strings.HasPrefix(input, "/users") {
 			writeUsersOnline(term)
 		} else if strings.HasPrefix(input, "/pubkey") {
 			term.Write([]byte("Your pubkey hash: " + hash + "\n"))
+		} else if strings.HasPrefix(input, "/nick") {
+			term.Write([]byte("Change your nick..."))
+			parts := strings.Split(input, " ")
+			if len(parts) < 2 {
+				term.Write([]byte("Usage: /nick <newname>\n"))
+				continue
+			} else if len(parts) > 2 {
+				term.Write([]byte("Usage: /nick <newname>\n"))
+			}
+			term.Write([]byte("We received: @" + input))
+			cleanedInput, cleanedInputErr := cleanString(input)
+			if cleanedInputErr != nil {
+				term.Write([]byte("There was an error handling your name change..."))
+			}
+			term.Write([]byte("Bytes accepted: @" + cleanedInput))
+			// need to manage user state globally for this change to make any difference I think..... maybe shelf this feature for now.
+			term.Write([]byte("Name changed to: @" + cleanedInput))
 		} else if strings.HasPrefix(input, "/message") {
 			parts := strings.Split(input, " ")
 			if len(parts) < 3 {
@@ -245,6 +311,7 @@ Say hello and press [enter] to chat
 		}
 	}
 }
+
 func writeUsersOnline(term *term.Terminal) {
 	term.Write([]byte("Connected users:\n"))
 	for _, user := range users {
@@ -252,5 +319,5 @@ func writeUsersOnline(term *term.Terminal) {
 	}
 }
 func writeHelpMenu(term *term.Terminal) {
-	term.Write([]byte("Available commands:\n/help\t- show this help message\n/pubkey\t- show your pubkey hash\n/users\t- list all connected users\n/message <user hash> <body>\t- send a direct message to a user\n"))
+	term.Write([]byte("Available commands:\n/help\t- show this help message\n/pubkey\t- show your pubkey hash\n/users\t- list all connected users\n/message <user hash> <body>\t- send a direct message to a user\n/ignore <user hash>\t- ignore a user's messages\n"))
 }
