@@ -292,7 +292,8 @@ Say hello and press [enter] to chat
 				term.Write([]byte("There was an error handling your name change..."))
 			}
 			term.Write([]byte("Bytes accepted: @" + cleanedInput))
-			// need to manage user state globally for this change to make any difference I think..... maybe shelf this feature for now.
+			// this may need to be a per-session change.
+			hash = cleanedInput
 			term.Write([]byte("Name changed to: @" + cleanedInput))
 		} else if strings.HasPrefix(input, "/message") {
 			parts := strings.Split(input, " ")
@@ -319,5 +320,5 @@ func writeUsersOnline(term *term.Terminal) {
 	}
 }
 func writeHelpMenu(term *term.Terminal) {
-	term.Write([]byte("Available commands:\n/help\t- show this help message\n/pubkey\t- show your pubkey hash\n/users\t- list all connected users\n/message <user hash> <body>\t- send a direct message to a user\n/ignore <user hash>\t- ignore a user's messages\n"))
+	term.Write([]byte("Available commands:\n/help\t- show this help message\n/pubkey\t- show your pubkey hash\n/users\t- list all connected users\n/message <user hash> <body>\t- send a direct message to a user\n"))
 }
