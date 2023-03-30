@@ -154,6 +154,7 @@ func main() {
 		}(conn)
 	}
 }
+
 func generateHash(pubkey string) string {
 	h := sha3.NewShake256()
 	h.Write([]byte(pubkey))
@@ -161,6 +162,7 @@ func generateHash(pubkey string) string {
 	h.Read(checksum)
 	return base64.StdEncoding.EncodeToString(checksum)
 }
+
 func disconnect(hash string) {
 	removeUser(hash)
 }
@@ -261,16 +263,19 @@ Say hello and press [enter] to chat
 			term.Write([]byte("\n"))
 			disconnect(hash)
 			return
-		}
-		if strings.HasPrefix(input, "/ignore") {
+		} else if strings.HasPrefix(input, "/ignore") {
 			parts := strings.Split(input, " ")
 			if len(parts) != 2 {
 				term.Write([]byte("Usage: /ignore <user hash>\n"))
 				continue
 			}
 			ignoredUser := parts[1]
-			users[hash].ignored[ignoredUser] = true
-			term.Write([]byte("User " + ignoredUser + " is now ignored.\n"))
+			if ignoredUser == hash {
+				term.Write([]byte("You cannot ignore yourself.\n"))
+			} else {
+				users[hash].ignored[ignoredUser] = true
+				term.Write([]byte("User " + ignoredUser + " is now ignored.\n"))
+			}
 		} else if strings.HasPrefix(input, "/help") {
 			writeHelpMenu(term)
 		} else if strings.HasPrefix(input, "/users") {
