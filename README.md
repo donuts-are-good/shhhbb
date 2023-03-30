@@ -1,3 +1,5 @@
+<img width="656" alt="image" src="https://user-images.githubusercontent.com/96031819/228712630-5c83e2ca-150e-406d-90ed-d2f56c32b7e8.png">
+
 # shhhbb
 ed25519 based BBS & chat over SSH
 
