@@ -10,7 +10,7 @@ ed25519 based BBS & chat over SSH
 
 ![demo video link](https://user-images.githubusercontent.com/96031819/225815939-1e7c5837-30c9-4d5b-938e-4dcb1b710401.mp4)
 
-**try it**: `ssh -o "ForwardAgent=no" -o "IdentitiesOnly=yes" -p 2223 shhhbb.com`
+**try it**: `ssh -p 2223 shhhbb.com`
 
 
 **instructions:** 
