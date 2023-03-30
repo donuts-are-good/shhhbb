@@ -1,5 +1,4 @@
-keys
-ykeys
+keys/ssh*
 shhhbb
 shhbb
 .DS_Store

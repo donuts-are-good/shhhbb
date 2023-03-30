@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shhhbb - Secure Chat</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 0 auto;
+            padding: 40px;
+        }
+        h1 {
+            text-align: center;
+        }
+        h3 {
+            margin-top: 3em;
+            margin-bottom: 1em;
+        }
+        p {
+            margin-top: 0;
+            margin-bottom: 1em;
+        }
+        pre {
+            background-color: #f8f8f8;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+    </style>
+</head>
+<body>
+    <h1>shhhbb, an ssh bbs</h1>
+    <center><p>shhhbb is a simple ssh based bbs. <br>host it with a single binary and connect with any ssh key.</p></center>
+    <center><a href="https://github.com/donuts-are-good/shhhbb/" target="_blank"> view source code</a> | <a href="https://github.com/donuts-are-good/shhhbb/releases/latest" target="_blank">download server</a></center>
+    <center><p style="opacity: 0.6; font-size: smaller;">supports most cpus and operating systems</p></center>
+    <h3>connect to the shhhbb.com bbs</h3>
+    <p>use your normal ssh client. you don't need to sign up, just sign in with ssh and the bbs does the rest.</p>
+    <p><b>Note:</b> If you need to generate a key, you can use this command to generate a good modern key. <code>ssh-keygen -t ed25519 -C "shhhbb.com bbs key"</code></p>
+    <pre>ssh -p 2223 shhhbb.com</pre>
+    
+    <h3>how to host your own bbs</h3>
+    <p>using shhhbb to host your bbs means anybody with any ssh key can interact with the bbs. as such, it's wise to run as a non-privileged user on a non-critical server, like a vps.</p>
+
+    <p><b>1. </b>download the server program <a href="https://github.com/donuts-are-good/shhhbb/releases/latest" target="_blank">https://github.com/donuts-are-good/shhhbb/releases/latest</a></center></p>
+    
+    <p><b>2. </b>put your host keys in <code>shhhbb/keys</code> directory. <br>
+      <b>Note: </b>if you need to generate a new key, try this: <code>ssh-keygen -t ed25519 -C "shhhbb host key"</code></p>
+    
+    <p><b>3. </b>specify a port and run the server like this: </p>
+    <pre>./shhhbb 2223</pre>
+
+
+    <h3>how to edit the code</h3>
+    <p>the server is MIT licensed. if you don't know what that means, don't worry about it. but the important part of what that means for this program is you can make any changes you like. here are some short instructions to get the code and build it yourself. it's easy, don't worry.</p>
+
+      <p><b>1. clone the repository</b></p>
+      <pre>git clone https://github.com/donuts-are-good/shhhbb</pre>
+      <p><b>2. </b>make your changes and save the file. everything happens in <code>main.go</code></p>
+      <p><b>3. </b>build it. all you need installed is Go, which you can get here: <a href="https://golang.org">https://golang.org</a></p>
+      <pre>go build</pre>
+      <p><b>4. Optional: </b> i made a thing that will compile the server for every cpu and os it is compatible with, which is about 30-40 platforms. if you're into that, it's a simple bash tool you can try here: <a href="https://github.com/donuts-are-good/release.sh">donuts-are-good/release.sh</a></p>
+      <pre>./release.sh --name "shhhbb" --version "v0.0.2" </pre>
