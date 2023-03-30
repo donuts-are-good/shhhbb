@@ -270,7 +270,12 @@ Say hello and press [enter] to chat
 				continue
 			}
 			ignoredUser := parts[1]
-			if ignoredUser == hash {
+			usersMutex.Lock()
+			_, exists := users[ignoredUser]
+			usersMutex.Unlock()
+			if !exists {
+				term.Write([]byte("User " + ignoredUser + " not found.\n"))
+			} else if ignoredUser == hash {
 				term.Write([]byte("You cannot ignore yourself.\n"))
 			} else {
 				users[hash].ignored[ignoredUser] = true
