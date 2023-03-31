@@ -423,7 +423,7 @@ func writeHelpMenu(term *term.Terminal) {
 		"/pubkey\t- show your pubkey hash\n" +
 		"/users\t- list all connected users\n" +
 		"/message <user hash> <body>\t- send a direct message to a user\n\n" +
-		"Message Board:\n"
+		"Message Board:\n" +
 		"/post <message>\t- post a new discussion\n" +
 		"/list\t- list all discussions\n" +
 		"/replies <post number>\t- list all replies to a discussion\n" +
