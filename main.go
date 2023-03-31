@@ -123,7 +123,7 @@ func listReplies(db *sqlx.DB, postNumber int, term *term.Terminal) {
 	term.Write([]byte(fmt.Sprintf("Replies to post %d [%s]:\n", disc.ID, disc.Author)))
 
 	var replies []*reply
-	err = db.Select(&replies, "SELECT author, message FROM replies WHERE id = ?", postNumber)
+	err = db.Select(&replies, "SELECT author, message FROM replies WHERE discussion_id = ?", postNumber)
 	if err != nil {
 		log.Printf("Error retrieving replies: %v", err)
 		term.Write([]byte("Error retrieving replies.\n"))
@@ -337,26 +337,7 @@ makeUsername:
 	hash = "@" + hash
 	addUser(hash, &user{Pubkey: pubkey, Hash: hash, Conn: channel})
 	term := term.NewTerminal(channel, "\r\n> ")
-	welcome := `
-
-           BB           BB           BB           BB           BB           
-,adPPYba,  BB,dPPYba,   BB,dPPYba,   BB,dPPYba,   BB,dPPYba,   BB,dPPYba,   
-I8[    ""  BBP'    "8a  BBP'    "8a  BBP'    "8a  BBP'    "8a  BBP'    "8a  
-'"Y8ba,    BB       BB  BB       BB  BB       BB  BB       d8  BB       d8  
-aa    ]8I  BB       BB  BB       BB  BB       BB  BBb,   ,a8"  BBb,   ,a8"  
-'"YbbdP"'  BB       BB  BB       BB  BB       BB  8Y"Ybbd8"'   8Y"Ybbd8"'   BBS
-> MIT 2023, https://github.com/donuts-are-good/shhhbb v.0.1.1    
-
- [RULES]                         [GOALS]
-  - your words are your own       - a space for hackers & devs
-  - your eyes are your own        - make cool things
-  - no chat logs are kept         - collaborate & share
-  - have fun :)                   - evolve
-
-Say hello and press [enter] to chat
-Type /help for more commands.
-
-`
+	welcome := welcomeMessageAscii()
 	printCachedMessages(term)
 	term.Write([]byte(welcome))
 	term.Write([]byte("\nWelcome :) You are " + hash))
@@ -452,6 +433,30 @@ Type /help for more commands.
 			}
 		}
 	}
+}
+
+func welcomeMessageAscii() string {
+	welcome := `
+
+           BB           BB           BB           BB           BB           
+,adPPYba,  BB,dPPYba,   BB,dPPYba,   BB,dPPYba,   BB,dPPYba,   BB,dPPYba,   
+I8[    ""  BBP'    "8a  BBP'    "8a  BBP'    "8a  BBP'    "8a  BBP'    "8a  
+'"Y8ba,    BB       BB  BB       BB  BB       BB  BB       d8  BB       d8  
+aa    ]8I  BB       BB  BB       BB  BB       BB  BBb,   ,a8"  BBb,   ,a8"  
+'"YbbdP"'  BB       BB  BB       BB  BB       BB  8Y"Ybbd8"'   8Y"Ybbd8"'   BBS
+> MIT 2023, https://github.com/donuts-are-good/shhhbb v.0.1.2    
+
+ [RULES]                         [GOALS]
+  - your words are your own       - a space for hackers & devs
+  - your eyes are your own        - make cool things
+  - no chat logs are kept         - collaborate & share
+  - have fun :)                   - evolve
+
+Say hello and press [enter] to chat
+Type /help for more commands.
+
+`
+	return welcome
 }
 
 func writeUsersOnline(term *term.Terminal) {
