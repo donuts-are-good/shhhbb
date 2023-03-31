@@ -15,6 +15,8 @@ import (
 	"sync"
 	"unicode"
 
+	"github.com/jmoiron/sqlx"
+	_ "github.com/mattn/go-sqlite3"
 	"golang.org/x/crypto/sha3"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/term"
@@ -22,78 +24,113 @@ import (
 
 var users = make(map[string]*user)
 var usersMutex sync.Mutex
-
 var messageCache *list.List
 
-type user struct {
-	pubkey  string
-	hash    string
-	conn    ssh.Channel
-	ignored map[string]bool
+func initSqliteDB() *sqlx.DB {
+	db, err := sqlx.Connect("sqlite3", "board.db")
+	if err != nil {
+		log.Fatalln(err)
+	}
+	return db
 }
+
+func initBoardSchema(db *sqlx.DB) {
+	schema := `
+	CREATE TABLE IF NOT EXISTS discussions (
+	    id INTEGER PRIMARY KEY,
+	    author TEXT NOT NULL,
+	    message TEXT NOT NULL
+	);
+
+	CREATE TABLE IF NOT EXISTS replies (
+	    id INTEGER PRIMARY KEY,
+	    discussion_id INTEGER NOT NULL,
+	    author TEXT NOT NULL,
+	    message TEXT NOT NULL,
+	    FOREIGN KEY (discussion_id) REFERENCES discussions(id) ON DELETE CASCADE
+	);
+	`
+	_, err := db.Exec(schema)
+	if err != nil {
+		log.Fatalln(err)
+	}
+}
+
+type user struct {
+	Pubkey  string          `json:"pubkey" db:"pubkey"`
+	Hash    string          `json:"hash" db:"hash"`
+	Conn    ssh.Channel     `json:"-"`
+	Ignored map[string]bool `json:"-"`
+}
+
 type discussion struct {
-	postNumber int
-	author     string
-	message    string
-	replies    []*reply
+	ID      int      `json:"id" db:"id"`
+	Author  string   `json:"author" db:"author"`
+	Message string   `json:"message" db:"message"`
+	Replies []*reply `json:"replies"`
 }
 
 type reply struct {
-	author  string
-	message string
+	Author  string `json:"author" db:"author"`
+	Message string `json:"message" db:"message"`
 }
 
-var discussions []*discussion
-var discussionsMutex sync.Mutex
-
-func addDiscussion(author, message string) int {
-	discussionsMutex.Lock()
-	defer discussionsMutex.Unlock()
-	postNumber := len(discussions) + 1
-	newDiscussion := &discussion{
-		postNumber: postNumber,
-		author:     author,
-		message:    message,
-		replies:    []*reply{},
+func addDiscussion(db *sqlx.DB, author, message string) int {
+	res, err := db.Exec("INSERT INTO discussions (author, message) VALUES (?, ?)", author, message)
+	if err != nil {
+		log.Println(err)
+		return -1
 	}
-	discussions = append(discussions, newDiscussion)
-	return postNumber
+	id, err := res.LastInsertId()
+	if err != nil {
+		log.Println(err)
+		return -1
+	}
+	return int(id)
 }
 
-func addReply(postNumber int, author, message string) bool {
-	discussionsMutex.Lock()
-	defer discussionsMutex.Unlock()
-	if postNumber < 1 || postNumber > len(discussions) {
+func addReply(db *sqlx.DB, postNumber int, author, message string) bool {
+	_, err := db.Exec("INSERT INTO replies (discussion_id, author, message) VALUES (?, ?, ?)", postNumber, author, message)
+	if err != nil {
+		log.Println(err)
 		return false
 	}
-	newReply := &reply{
-		author:  author,
-		message: message,
-	}
-	discussions[postNumber-1].replies = append(discussions[postNumber-1].replies, newReply)
 	return true
-}
 
-func listDiscussions(term *term.Terminal) {
-	discussionsMutex.Lock()
-	defer discussionsMutex.Unlock()
+}
+func listDiscussions(db *sqlx.DB, term *term.Terminal) {
+	var discussions []*discussion
+	err := db.Select(&discussions, "SELECT id, author, message FROM discussions")
+	if err != nil {
+		log.Printf("Error retrieving discussions: %v", err)
+		term.Write([]byte("Error retrieving discussions.\n"))
+		return
+	}
 	term.Write([]byte("Discussions:\n"))
 	for _, disc := range discussions {
-		term.Write([]byte(fmt.Sprintf("%d. [%s] %s\n", disc.postNumber, disc.author, disc.message)))
+		term.Write([]byte(fmt.Sprintf("%d. [%s] %s\n", disc.ID, disc.Author, disc.Message)))
 	}
 }
 
-func listReplies(postNumber int, term *term.Terminal) {
-	discussionsMutex.Lock()
-	defer discussionsMutex.Unlock()
-	if postNumber < 1 || postNumber > len(discussions) {
+func listReplies(db *sqlx.DB, postNumber int, term *term.Terminal) {
+	var disc discussion
+	err := db.Get(&disc, "SELECT id, author, message FROM discussions WHERE id = ?", postNumber)
+	if err != nil {
+		log.Printf("Error retrieving discussion: %v", err)
 		term.Write([]byte("Invalid post number.\n"))
 		return
 	}
-	disc := discussions[postNumber-1]
-	term.Write([]byte(fmt.Sprintf("Replies to post %d [%s]:\n", postNumber, disc.author)))
-	for i, rep := range disc.replies {
-		term.Write([]byte(fmt.Sprintf("%d. [%s] %s\n", i+1, rep.author, rep.message)))
+	term.Write([]byte(fmt.Sprintf("Replies to post %d [%s]:\n", disc.ID, disc.Author)))
+
+	var replies []*reply
+	err = db.Select(&replies, "SELECT author, message FROM replies WHERE id = ?", postNumber)
+	if err != nil {
+		log.Printf("Error retrieving replies: %v", err)
+		term.Write([]byte("Error retrieving replies.\n"))
+		return
+	}
+	for i, rep := range replies {
+		term.Write([]byte(fmt.Sprintf("%d. [%s] %s\n", i+1, rep.Author, rep.Message)))
 	}
 }
 
@@ -140,7 +177,7 @@ func configureSSHServer(privateKeyPath string) (*ssh.ServerConfig, error) {
 func addUser(hash string, u *user) {
 	usersMutex.Lock()
 	defer usersMutex.Unlock()
-	u.ignored = make(map[string]bool)
+	u.Ignored = make(map[string]bool)
 	users[hash] = u
 }
 
@@ -161,6 +198,11 @@ func getAllUsers() []*user {
 }
 
 func main() {
+	db := initSqliteDB()
+	defer db.Close()
+
+	initBoardSchema(db)
+
 	var privateKeyPath string
 	flag.StringVar(&privateKeyPath, "key", "./keys/ssh_host_ed25519_key", "Path to the private key")
 	flag.Parse()
@@ -215,7 +257,7 @@ func main() {
 					fmt.Println("Error accepting channel:", err.Error())
 					return
 				}
-				go handleConnection(channel, sshConn, requests)
+				go handleConnection(db, channel, sshConn, requests)
 			}
 		}(conn)
 	}
@@ -239,8 +281,8 @@ func broadcast(message string) {
 	log.Println("msg txt: ", message)
 	sender := message[1:9]
 	for _, user := range getAllUsers() {
-		if _, ignored := user.ignored[sender]; !ignored {
-			fmt.Fprintln(user.conn, "\r\n"+message)
+		if _, ignored := user.Ignored[sender]; !ignored {
+			fmt.Fprintln(user.Conn, "\r\n"+message)
 		}
 	}
 }
@@ -265,18 +307,18 @@ func sendMessage(senderHash, recipientHash, message string, term *term.Terminal)
 	recipient, ok := users[recipientHash]
 	usersMutex.Unlock()
 	if !ok {
-		fmt.Fprintf(users[senderHash].conn, "\n\rUser with hash %s not found\n", recipientHash)
+		fmt.Fprintf(users[senderHash].Conn, "\n\rUser with hash %s not found\n", recipientHash)
 		return
 	}
-	if recipient.ignored[senderHash] {
+	if recipient.Ignored[senderHash] {
 		return
 	}
 	message = "\r\n[DirectMessage][" + senderHash + "]> " + message + "\r\n"
-	fmt.Fprintln(recipient.conn, message)
+	fmt.Fprintln(recipient.Conn, message)
 	term.Write([]byte(message))
 }
 
-func handleConnection(channel ssh.Channel, sshConn *ssh.ServerConn, requests <-chan *ssh.Request) {
+func handleConnection(db *sqlx.DB, channel ssh.Channel, sshConn *ssh.ServerConn, requests <-chan *ssh.Request) {
 	defer channel.Close()
 	if sshConn.Permissions == nil || sshConn.Permissions.Extensions == nil {
 		fmt.Fprintln(channel, "Unable to retrieve your public key.")
@@ -293,7 +335,7 @@ makeUsername:
 		goto makeUsername // yolo, im not sorry for using goto
 	}
 	hash = "@" + hash
-	addUser(hash, &user{pubkey: pubkey, hash: hash, conn: channel})
+	addUser(hash, &user{Pubkey: pubkey, Hash: hash, Conn: channel})
 	term := term.NewTerminal(channel, "\r\n> ")
 	welcome := `
 
@@ -303,20 +345,21 @@ I8[    ""  BBP'    "8a  BBP'    "8a  BBP'    "8a  BBP'    "8a  BBP'    "8a
 '"Y8ba,    BB       BB  BB       BB  BB       BB  BB       d8  BB       d8  
 aa    ]8I  BB       BB  BB       BB  BB       BB  BBb,   ,a8"  BBb,   ,a8"  
 '"YbbdP"'  BB       BB  BB       BB  BB       BB  8Y"Ybbd8"'   8Y"Ybbd8"'   BBS
-> MIT 2023, https://github.com/donuts-are-good/shhhbb v.0.0.2 alpha		    
+> MIT 2023, https://github.com/donuts-are-good/shhhbb v.0.1.0 alpha		    
 
  [RULES]                         [GOALS]
   - your words are your own       - a space for hackers & devs
   - your eyes are your own        - make cool things
-  - no logs are kept              - collaborate & share
+  - no chat logs are kept         - collaborate & share
   - have fun :)                   - evolve
 
 Say hello and press [enter] to chat
+Type /help for more commands.
 
 `
 	printCachedMessages(term)
 	term.Write([]byte(welcome))
-	term.Write([]byte("You are " + hash + "\nType /help for help.\n\n"))
+	term.Write([]byte("\nWelcome :) You are " + hash))
 	for {
 		input, err := term.ReadLine()
 		if err != nil {
@@ -344,7 +387,7 @@ Say hello and press [enter] to chat
 			} else if ignoredUser == hash {
 				term.Write([]byte("You cannot ignore yourself.\n"))
 			} else {
-				users[hash].ignored[ignoredUser] = true
+				users[hash].Ignored[ignoredUser] = true
 				term.Write([]byte("User " + ignoredUser + " is now ignored.\n"))
 			}
 		} else if strings.HasPrefix(input, "/help") {
@@ -368,10 +411,10 @@ Say hello and press [enter] to chat
 				term.Write([]byte("Usage: /post <message>\n"))
 				continue
 			}
-			postNumber := addDiscussion(hash, parts[1])
+			postNumber := addDiscussion(db, hash, parts[1])
 			term.Write([]byte(fmt.Sprintf("Posted new discussion with post number %d.\n", postNumber)))
 		} else if strings.HasPrefix(input, "/list") {
-			listDiscussions(term)
+			listDiscussions(db, term)
 		} else if strings.HasPrefix(input, "/replies") {
 			parts := strings.SplitN(input, " ", 2)
 			if len(parts) < 2 {
@@ -383,7 +426,7 @@ Say hello and press [enter] to chat
 				term.Write([]byte("Invalid post number. Usage: /replies <post number>\n"))
 				continue
 			}
-			listReplies(postNum, term)
+			listReplies(db, postNum, term)
 		} else if strings.HasPrefix(input, "/reply") {
 			parts := strings.SplitN(input, " ", 3)
 			if len(parts) < 3 {
@@ -396,7 +439,7 @@ Say hello and press [enter] to chat
 				continue
 			}
 			replyBody := parts[2]
-			replySuccess := addReply(postNum, hash, replyBody)
+			replySuccess := addReply(db, postNum, hash, replyBody)
 			if !replySuccess {
 				term.Write([]byte("Failed to reply to post. Please check the post number and try again.\n"))
 			} else {
@@ -414,7 +457,7 @@ Say hello and press [enter] to chat
 func writeUsersOnline(term *term.Terminal) {
 	term.Write([]byte("Connected users:\n"))
 	for _, user := range users {
-		term.Write([]byte("- " + user.hash + "\n"))
+		term.Write([]byte("- " + user.Hash + "\n"))
 	}
 }
 func writeHelpMenu(term *term.Terminal) {
