@@ -345,7 +345,7 @@ I8[    ""  BBP'    "8a  BBP'    "8a  BBP'    "8a  BBP'    "8a  BBP'    "8a
 '"Y8ba,    BB       BB  BB       BB  BB       BB  BB       d8  BB       d8  
 aa    ]8I  BB       BB  BB       BB  BB       BB  BBb,   ,a8"  BBb,   ,a8"  
 '"YbbdP"'  BB       BB  BB       BB  BB       BB  8Y"Ybbd8"'   8Y"Ybbd8"'   BBS
-> MIT 2023, https://github.com/donuts-are-good/shhhbb v.0.1.0 alpha		    
+> MIT 2023, https://github.com/donuts-are-good/shhhbb v.0.1.1    
 
  [RULES]                         [GOALS]
   - your words are your own       - a space for hackers & devs
