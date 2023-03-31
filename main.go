@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode"
@@ -29,6 +30,71 @@ type user struct {
 	hash    string
 	conn    ssh.Channel
 	ignored map[string]bool
+}
+type discussion struct {
+	postNumber int
+	author     string
+	message    string
+	replies    []*reply
+}
+
+type reply struct {
+	author  string
+	message string
+}
+
+var discussions []*discussion
+var discussionsMutex sync.Mutex
+
+func addDiscussion(author, message string) int {
+	discussionsMutex.Lock()
+	defer discussionsMutex.Unlock()
+	postNumber := len(discussions) + 1
+	newDiscussion := &discussion{
+		postNumber: postNumber,
+		author:     author,
+		message:    message,
+		replies:    []*reply{},
+	}
+	discussions = append(discussions, newDiscussion)
+	return postNumber
+}
+
+func addReply(postNumber int, author, message string) bool {
+	discussionsMutex.Lock()
+	defer discussionsMutex.Unlock()
+	if postNumber < 1 || postNumber > len(discussions) {
+		return false
+	}
+	newReply := &reply{
+		author:  author,
+		message: message,
+	}
+	discussions[postNumber-1].replies = append(discussions[postNumber-1].replies, newReply)
+	return true
+}
+
+func listDiscussions(term *term.Terminal) {
+	discussionsMutex.Lock()
+	defer discussionsMutex.Unlock()
+	term.Write([]byte("Discussions:\n"))
+	for _, disc := range discussions {
+		term.Write([]byte(fmt.Sprintf("%d. [%s] %s\n", disc.postNumber, disc.author, disc.message)))
+	}
+}
+
+func listReplies(postNumber int, term *term.Terminal) {
+	discussionsMutex.Lock()
+	defer discussionsMutex.Unlock()
+	if postNumber < 1 || postNumber > len(discussions) {
+		term.Write([]byte("Invalid post number.\n"))
+		return
+	}
+	disc := discussions[postNumber-1]
+	term.Write([]byte(fmt.Sprintf("Replies to post %d [%s]:\n", postNumber, disc.author)))
+	for i, rep := range disc.replies {
+		term.Write([]byte(fmt.Sprintf("%d. [%s] %s\n", i+1, rep.author, rep.message)))
+	}
 }
 
 func init() {
@@ -287,24 +353,6 @@ Say hello and press [enter] to chat
 			writeUsersOnline(term)
 		} else if strings.HasPrefix(input, "/pubkey") {
 			term.Write([]byte("Your pubkey hash: " + hash + "\n"))
-		} else if strings.HasPrefix(input, "/nick") {
-			term.Write([]byte("Change your nick..."))
-			parts := strings.Split(input, " ")
-			if len(parts) < 2 {
-				term.Write([]byte("Usage: /nick <newname>\n"))
-				continue
-			} else if len(parts) > 2 {
-				term.Write([]byte("Usage: /nick <newname>\n"))
-			}
-			term.Write([]byte("We received: @" + input))
-			cleanedInput, cleanedInputErr := cleanString(input)
-			if cleanedInputErr != nil {
-				term.Write([]byte("There was an error handling your name change..."))
-			}
-			term.Write([]byte("Bytes accepted: @" + cleanedInput))
-			// this may need to be a per-session change.
-			hash = cleanedInput
-			term.Write([]byte("Name changed to: @" + cleanedInput))
 		} else if strings.HasPrefix(input, "/message") {
 			parts := strings.Split(input, " ")
 			if len(parts) < 3 {
@@ -314,6 +362,46 @@ Say hello and press [enter] to chat
 			recipientHash := parts[1]
 			message := strings.Join(parts[2:], " ")
 			sendMessage(hash, recipientHash, message, term)
+		} else if strings.HasPrefix(input, "/post") {
+			parts := strings.SplitN(input, " ", 2)
+			if len(parts) < 2 {
+				term.Write([]byte("Usage: /post <message>\n"))
+				continue
+			}
+			postNumber := addDiscussion(hash, parts[1])
+			term.Write([]byte(fmt.Sprintf("Posted new discussion with post number %d.\n", postNumber)))
+		} else if strings.HasPrefix(input, "/list") {
+			listDiscussions(term)
+		} else if strings.HasPrefix(input, "/replies") {
+			parts := strings.SplitN(input, " ", 2)
+			if len(parts) < 2 {
+				term.Write([]byte("Usage: /replies <post number>\n"))
+				continue
+			}
+			postNum, err := strconv.Atoi(parts[1])
+			if err != nil {
+				term.Write([]byte("Invalid post number. Usage: /replies <post number>\n"))
+				continue
+			}
+			listReplies(postNum, term)
+		} else if strings.HasPrefix(input, "/reply") {
+			parts := strings.SplitN(input, " ", 3)
+			if len(parts) < 3 {
+				term.Write([]byte("Usage: /reply <post number> <reply body>\n"))
+				continue
+			}
+			postNum, err := strconv.Atoi(parts[1])
+			if err != nil {
+				term.Write([]byte("Invalid post number. Usage: /reply <post number> <reply body>\n"))
+				continue
+			}
+			replyBody := parts[2]
+			replySuccess := addReply(postNum, hash, replyBody)
+			if !replySuccess {
+				term.Write([]byte("Failed to reply to post. Please check the post number and try again.\n"))
+			} else {
+				term.Write([]byte("Reply successfully added to post.\n"))
+			}
 		} else {
 			message := fmt.Sprintf("[%s]: %s", hash, input)
 			if len(input) > 0 || !strings.HasPrefix(input, "/") {
@@ -330,5 +418,14 @@ func writeUsersOnline(term *term.Terminal) {
 	}
 }
 func writeHelpMenu(term *term.Terminal) {
-	term.Write([]byte("Available commands:\n/help\t- show this help message\n/pubkey\t- show your pubkey hash\n/users\t- list all connected users\n/message <user hash> <body>\t- send a direct message to a user\n"))
+	term.Write([]byte("Available commands:\n" +
+		"/help\t- show this help message\n" +
+		"/pubkey\t- show your pubkey hash\n" +
+		"/users\t- list all connected users\n" +
+		"/message <user hash> <body>\t- send a direct message to a user\n\n" +
+		"Message Board:\n"
+		"/post <message>\t- post a new discussion\n" +
+		"/list\t- list all discussions\n" +
+		"/replies <post number>\t- list all replies to a discussion\n" +
+		"/reply <post number> <reply body>\t- reply to a discussion\n"))
 }
