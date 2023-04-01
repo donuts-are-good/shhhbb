@@ -12,7 +12,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"unicode"
 
 	"github.com/jmoiron/sqlx"
@@ -22,186 +21,24 @@ import (
 	"golang.org/x/term"
 )
 
-var users = make(map[string]*user)
-var usersMutex sync.Mutex
-var messageCache *list.List
-
-func initSqliteDB() *sqlx.DB {
-	db, err := sqlx.Connect("sqlite3", "board.db")
-	if err != nil {
-		log.Fatalln(err)
-	}
-	return db
-}
-
-func initBoardSchema(db *sqlx.DB) {
-	schema := `
-	CREATE TABLE IF NOT EXISTS discussions (
-	    id INTEGER PRIMARY KEY,
-	    author TEXT NOT NULL,
-	    message TEXT NOT NULL
-	);
-
-	CREATE TABLE IF NOT EXISTS replies (
-	    id INTEGER PRIMARY KEY,
-	    discussion_id INTEGER NOT NULL,
-	    author TEXT NOT NULL,
-	    message TEXT NOT NULL,
-	    FOREIGN KEY (discussion_id) REFERENCES discussions(id) ON DELETE CASCADE
-	);
-	`
-	_, err := db.Exec(schema)
-	if err != nil {
-		log.Fatalln(err)
-	}
-}
-
-type user struct {
-	Pubkey  string          `json:"pubkey" db:"pubkey"`
-	Hash    string          `json:"hash" db:"hash"`
-	Conn    ssh.Channel     `json:"-"`
-	Ignored map[string]bool `json:"-"`
-}
-
-type discussion struct {
-	ID      int      `json:"id" db:"id"`
-	Author  string   `json:"author" db:"author"`
-	Message string   `json:"message" db:"message"`
-	Replies []*reply `json:"replies"`
-}
-
-type reply struct {
-	Author  string `json:"author" db:"author"`
-	Message string `json:"message" db:"message"`
-}
-
-func addDiscussion(db *sqlx.DB, author, message string) int {
-	res, err := db.Exec("INSERT INTO discussions (author, message) VALUES (?, ?)", author, message)
-	if err != nil {
-		log.Println(err)
-		return -1
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		log.Println(err)
-		return -1
-	}
-	return int(id)
-}
-
-func addReply(db *sqlx.DB, postNumber int, author, message string) bool {
-	_, err := db.Exec("INSERT INTO replies (discussion_id, author, message) VALUES (?, ?, ?)", postNumber, author, message)
-	if err != nil {
-		log.Println(err)
-		return false
-	}
-	return true
-
-}
-func listDiscussions(db *sqlx.DB, term *term.Terminal) {
-	var discussions []*discussion
-	err := db.Select(&discussions, "SELECT id, author, message FROM discussions")
-	if err != nil {
-		log.Printf("Error retrieving discussions: %v", err)
-		term.Write([]byte("Error retrieving discussions.\n"))
-		return
-	}
-	term.Write([]byte("Discussions:\n"))
-	for _, disc := range discussions {
-		term.Write([]byte(fmt.Sprintf("%d. [%s] %s\n", disc.ID, disc.Author, disc.Message)))
-	}
-}
-
-func listReplies(db *sqlx.DB, postNumber int, term *term.Terminal) {
-	var disc discussion
-	err := db.Get(&disc, "SELECT id, author, message FROM discussions WHERE id = ?", postNumber)
-	if err != nil {
-		log.Printf("Error retrieving discussion: %v", err)
-		term.Write([]byte("Invalid post number.\n"))
-		return
-	}
-	term.Write([]byte(fmt.Sprintf("Replies to post %d [%s]:\n", disc.ID, disc.Author)))
-
-	var replies []*reply
-	err = db.Select(&replies, "SELECT author, message FROM replies WHERE discussion_id = ?", postNumber)
-	if err != nil {
-		log.Printf("Error retrieving replies: %v", err)
-		term.Write([]byte("Error retrieving replies.\n"))
-		return
-	}
-	for i, rep := range replies {
-		term.Write([]byte(fmt.Sprintf("%d. [%s] %s\n", i+1, rep.Author, rep.Message)))
-	}
-}
-
 func init() {
 	messageCache = list.New()
 }
-
-func addToCache(message string) {
-	messageCache.PushBack(message)
-	if messageCache.Len() > 100 {
-		messageCache.Remove(messageCache.Front())
-	}
-}
-
-func printCachedMessages(term *term.Terminal) {
-	for e := messageCache.Front(); e != nil; e = e.Next() {
-		term.Write([]byte(e.Value.(string) + "\r\n"))
-	}
-}
-
-func configureSSHServer(privateKeyPath string) (*ssh.ServerConfig, error) {
-	privateKeyBytes, err := os.ReadFile(privateKeyPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read private key: %w", err)
-	}
-	privateKey, err := ssh.ParsePrivateKey(privateKeyBytes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse private key: %w", err)
-	}
-	config := &ssh.ServerConfig{
-		PublicKeyCallback: func(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
-			fmt.Printf("Received public key of type %s from user %s\n", key.Type(), conn.User())
-			return &ssh.Permissions{
-				Extensions: map[string]string{
-					"pubkey": string(key.Marshal()),
-				},
-			}, nil
-		},
-	}
-	config.AddHostKey(privateKey)
-	return config, nil
-}
-
-func addUser(hash string, u *user) {
-	usersMutex.Lock()
-	defer usersMutex.Unlock()
-	u.Ignored = make(map[string]bool)
-	users[hash] = u
-}
-
-func removeUser(hash string) {
-	usersMutex.Lock()
-	defer usersMutex.Unlock()
-	delete(users, hash)
-}
-
-func getAllUsers() []*user {
-	usersMutex.Lock()
-	defer usersMutex.Unlock()
-	allUsers := make([]*user, 0, len(users))
-	for _, user := range users {
-		allUsers = append(allUsers, user)
-	}
-	return allUsers
-}
-
 func main() {
 	db := initSqliteDB()
 	defer db.Close()
 
 	initBoardSchema(db)
+
+	adminDB := initAdminDB()
+	if adminDB == nil {
+		return
+	}
+	defer adminDB.Close()
+
+	initAdminSchema(adminDB)
+
+	go adminAPI()
 
 	var privateKeyPath string
 	flag.StringVar(&privateKeyPath, "key", "./keys/ssh_host_ed25519_key", "Path to the private key")
@@ -285,6 +122,124 @@ func broadcast(message string) {
 			fmt.Fprintln(user.Conn, "\r\n"+message)
 		}
 	}
+}
+
+func addDiscussion(db *sqlx.DB, author, message string) int {
+	res, err := db.Exec("INSERT INTO discussions (author, message) VALUES (?, ?)", author, message)
+	if err != nil {
+		log.Println(err)
+		return -1
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		log.Println(err)
+		return -1
+	}
+	return int(id)
+}
+
+func addReply(db *sqlx.DB, postNumber int, author, message string) bool {
+	_, err := db.Exec("INSERT INTO replies (discussion_id, author, message) VALUES (?, ?, ?)", postNumber, author, message)
+	if err != nil {
+		log.Println(err)
+		return false
+	}
+	return true
+
+}
+func listDiscussions(db *sqlx.DB, term *term.Terminal) {
+	var discussions []*discussion
+	err := db.Select(&discussions, "SELECT id, author, message FROM discussions")
+	if err != nil {
+		log.Printf("Error retrieving discussions: %v", err)
+		term.Write([]byte("Error retrieving discussions.\n"))
+		return
+	}
+	term.Write([]byte("Discussions:\n"))
+	for _, disc := range discussions {
+		term.Write([]byte(fmt.Sprintf("%d. [%s] %s\n", disc.ID, disc.Author, disc.Message)))
+	}
+}
+
+func listReplies(db *sqlx.DB, postNumber int, term *term.Terminal) {
+	var disc discussion
+	err := db.Get(&disc, "SELECT id, author, message FROM discussions WHERE id = ?", postNumber)
+	if err != nil {
+		log.Printf("Error retrieving discussion: %v", err)
+		term.Write([]byte("Invalid post number.\n"))
+		return
+	}
+	term.Write([]byte(fmt.Sprintf("Replies to post %d [%s]:\n", disc.ID, disc.Author)))
+
+	var replies []*reply
+	err = db.Select(&replies, "SELECT author, message FROM replies WHERE discussion_id = ?", postNumber)
+	if err != nil {
+		log.Printf("Error retrieving replies: %v", err)
+		term.Write([]byte("Error retrieving replies.\n"))
+		return
+	}
+	for i, rep := range replies {
+		term.Write([]byte(fmt.Sprintf("%d. [%s] %s\n", i+1, rep.Author, rep.Message)))
+	}
+}
+
+func addToCache(message string) {
+	messageCache.PushBack(message)
+	if messageCache.Len() > 100 {
+		messageCache.Remove(messageCache.Front())
+	}
+}
+
+func printCachedMessages(term *term.Terminal) {
+	for e := messageCache.Front(); e != nil; e = e.Next() {
+		term.Write([]byte(e.Value.(string) + "\r\n"))
+	}
+}
+
+func configureSSHServer(privateKeyPath string) (*ssh.ServerConfig, error) {
+	privateKeyBytes, err := os.ReadFile(privateKeyPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read private key: %w", err)
+	}
+	privateKey, err := ssh.ParsePrivateKey(privateKeyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse private key: %w", err)
+	}
+	config := &ssh.ServerConfig{
+		PublicKeyCallback: func(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+			fmt.Printf("Received public key of type %s from user %s\n", key.Type(), conn.User())
+			return &ssh.Permissions{
+				Extensions: map[string]string{
+					"pubkey": string(key.Marshal()),
+				},
+			}, nil
+		},
+	}
+	config.AddHostKey(privateKey)
+	return config, nil
+}
+
+func addUser(hash string, u *user) {
+	usersMutex.Lock()
+	defer usersMutex.Unlock()
+	u.Ignored = make(map[string]bool)
+	users[hash] = u
+}
+
+func removeUser(hash string) {
+	usersMutex.Lock()
+	defer usersMutex.Unlock()
+	delete(users, hash)
+}
+
+func getAllUsers() []*user {
+	usersMutex.Lock()
+	defer usersMutex.Unlock()
+	allUsers := make([]*user, 0, len(users))
+	for _, user := range users {
+		allUsers = append(allUsers, user)
+	}
+	return allUsers
 }
 
 func cleanString(dirtyString string) (string, error) {
@@ -373,6 +328,10 @@ makeUsername:
 			}
 		} else if strings.HasPrefix(input, "/help") {
 			writeHelpMenu(term)
+		} else if strings.HasPrefix(input, "/license") {
+			writeLicenseProse(term)
+		} else if strings.HasPrefix(input, "/version") {
+			writeVersionInfo(term)
 		} else if strings.HasPrefix(input, "/users") {
 			writeUsersOnline(term)
 		} else if strings.HasPrefix(input, "/pubkey") {
@@ -444,7 +403,7 @@ I8[    ""  BBP'    "8a  BBP'    "8a  BBP'    "8a  BBP'    "8a  BBP'    "8a
 '"Y8ba,    BB       BB  BB       BB  BB       BB  BB       d8  BB       d8  
 aa    ]8I  BB       BB  BB       BB  BB       BB  BBb,   ,a8"  BBb,   ,a8"  
 '"YbbdP"'  BB       BB  BB       BB  BB       BB  8Y"Ybbd8"'   8Y"Ybbd8"'   BBS
-> MIT 2023, https://github.com/donuts-are-good/shhhbb v.0.1.2    
+> MIT 2023, https://github.com/donuts-are-good/shhhbb ` + semverInfo + `   
 
  [RULES]                         [GOALS]
   - your words are your own       - a space for hackers & devs
@@ -466,14 +425,63 @@ func writeUsersOnline(term *term.Terminal) {
 	}
 }
 func writeHelpMenu(term *term.Terminal) {
-	term.Write([]byte("Available commands:\n" +
-		"/help\t- show this help message\n" +
-		"/pubkey\t- show your pubkey hash\n" +
-		"/users\t- list all connected users\n" +
-		"/message <user hash> <body>\t- send a direct message to a user\n\n" +
-		"Message Board:\n" +
-		"/post <message>\t- post a new discussion\n" +
-		"/list\t- list all discussions\n" +
-		"/replies <post number>\t- list all replies to a discussion\n" +
-		"/reply <post number> <reply body>\t- reply to a discussion\n"))
+	term.Write([]byte(`
+[General Commands]
+	/help		
+		- show this help message
+	/pubkey		
+		- show your pubkey hash, which is also your username
+	/users		
+		- list all online users
+	/message <user hash> <body> 
+		- ex: /message @A1Gla593 hey there friend
+		- send a direct message to a user
+
+[Message Board]
+	/post <message>
+		- ex: /post this is my cool title
+		- posts a new discussion topic 
+	/list
+		- list all discussions 
+	/replies <post number>
+		- ex: /replies 1
+		- list all replies to a discussion
+	/reply <post number> <reply body>
+		- ex: /reply 1 hello everyone
+		- reply to a discussion
+
+[Misc. Commands]
+	/license
+		- display the license text for shhhbb 
+	/version
+		- display the shhhbb version information	
+	`))
+}
+func writeLicenseProse(term *term.Terminal) {
+	term.Write([]byte(`
+MIT License
+Copyright (c) 2023 donuts-are-good https://github.com/donuts-are-good
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+	`))
+}
+func writeVersionInfo(term *term.Terminal) {
+	term.Write([]byte(`
+	shhhbb bbs ` + semverInfo + `
+	MIT License 2023 donuts-are-good
+	https://github.com/donuts-are-good/shhhbb
+	`))
 }
