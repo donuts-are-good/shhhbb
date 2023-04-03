@@ -18,7 +18,7 @@ ed25519 based BBS & chat over SSH
 **instructions:** 
 1. create a directory called `./keys` 
 2. generate an ed25519 keypair in there without password
-`ssh-keygen -t ed25519 -C "my cool keypair"`
+`ssh-keygen -t ed25519 -C "my cool keypair" -f ./keys/ssh_host_ed25519_key`
 3. launch with `./shhhbb 2223` where `2223` is the port
 
 connect with `ssh -o "ForwardAgent=no" -o "IdentitiesOnly=yes" -p 2223 shhhbb.com` where shhhbb.com is your domain or ip
