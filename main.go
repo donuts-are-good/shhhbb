@@ -28,6 +28,17 @@ func init() {
 	messageCache = list.New()
 }
 func main() {
+	whitelist, err := loadPubkeyList("whitelist.txt")
+	if err != nil {
+		log.Printf("Error loading whitelist: %v", err)
+		return
+	}
+
+	blacklist, err := loadPubkeyList("blacklist.txt")
+	if err != nil {
+		log.Printf("Error loading blacklist: %v", err)
+		return
+	}
 
 	db := initSqliteDB()
 	if db == nil {
@@ -101,13 +112,13 @@ func main() {
 					fmt.Println("Error accepting channel:", err.Error())
 					return
 				}
-				go handleConnection(db, channel, sshConn, requests)
+				go handleConnection(db, channel, sshConn, requests, whitelist, blacklist)
 			}
 		}(conn)
 	}
 }
 
-func handleConnection(db *sqlx.DB, channel ssh.Channel, sshConn *ssh.ServerConn, requests <-chan *ssh.Request) {
+func handleConnection(db *sqlx.DB, channel ssh.Channel, sshConn *ssh.ServerConn, requests <-chan *ssh.Request, whitelist map[string]bool, blacklist map[string]bool) {
 	defer channel.Close()
 	if sshConn.Permissions == nil || sshConn.Permissions.Extensions == nil {
 		fmt.Fprintln(channel, "Unable to retrieve your public key.")
@@ -119,6 +130,19 @@ func handleConnection(db *sqlx.DB, channel ssh.Channel, sshConn *ssh.ServerConn,
 		return
 	}
 	hash := formatUsernameFromPubkey(pubkey)
+
+	if _, ok := whitelist[hash]; !ok {
+		fmt.Fprintln(channel, "You are not authorized to connect to this server.")
+		disconnect(hash)
+		return
+	}
+
+	if _, ok := blacklist[hash]; ok {
+		fmt.Fprintln(channel, "You have been banned from this server.")
+		disconnect(hash)
+		return
+	}
+
 	addUser(hash, &user{Pubkey: pubkey, Hash: hash, Conn: channel})
 
 	term := term.NewTerminal(channel, "")
@@ -189,6 +213,27 @@ func handleConnection(db *sqlx.DB, channel ssh.Channel, sshConn *ssh.ServerConn,
 			}
 		}
 	}
+}
+func loadPubkeyList(filename string) (map[string]bool, error) {
+	file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("unable to open %s: %v", filename, err)
+	}
+	defer file.Close()
+
+	pubkeyList := make(map[string]bool)
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		pubkey := scanner.Text()
+		pubkeyList[pubkey] = true
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("error reading %s: %v", filename, err)
+	}
+
+	return pubkeyList, nil
 }
 
 // func handleConnection(db *sqlx.DB, channel ssh.Channel, sshConn *ssh.ServerConn, requests <-chan *ssh.Request) {
@@ -391,9 +436,9 @@ func listDiscussions(db *sqlx.DB, term *term.Terminal) {
 		return scoreI > scoreJ
 	})
 
-	term.Write([]byte("Discussions:\n\n[id.] [💬replies] [topic]\n\n"))
+	term.Write([]byte("Discussions:\n\n[id.]\t[💬replies]\t[topic]\n\n"))
 	for _, disc := range discussions {
-		term.Write([]byte(fmt.Sprintf("%d. 💬%d [%s] %s\n", disc.ID, disc.ReplyCount, disc.Author, disc.Message)))
+		term.Write([]byte(fmt.Sprintf("%d.\t💬%d\t[%s] %s\n", disc.ID, disc.ReplyCount, disc.Author, disc.Message)))
 	}
 }
 

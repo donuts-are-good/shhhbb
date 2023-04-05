@@ -1,7 +1,7 @@
-keys/ssh*
+blacklist.txt 
+general-motd.txt 
+whitelist.txt
 shhhbb
-shhbb
-.DS_Store
-.Trash-1000
-BUILDS
 *.db
+BUILDS
+keys/ssh*
