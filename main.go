@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"container/list"
 	"encoding/base64"
 	"errors"
@@ -25,17 +26,21 @@ func init() {
 	messageCache = list.New()
 }
 func main() {
-	db := initSqliteDB()
-	defer db.Close()
 
+	db := initSqliteDB()
+	if db == nil {
+		log.Panic("couldn't load main db")
+		return
+	}
+	defer db.Close()
 	initBoardSchema(db)
 
 	adminDB := initAdminDB()
 	if adminDB == nil {
+		log.Println("couldn't load admin db")
 		return
 	}
 	defer adminDB.Close()
-
 	initAdminSchema(adminDB)
 
 	go adminAPI()
@@ -99,6 +104,16 @@ func main() {
 		}(conn)
 	}
 }
+func clearScreen(term *term.Terminal) {
+	term.Write([]byte("\033[2J"))
+	term.Write([]byte("\033[H"))
+}
+func saveCursorPosition(term *term.Terminal) {
+	term.Write([]byte("\033[s"))
+}
+func restoreCursorPosition(term *term.Terminal) {
+	term.Write([]byte("\033[u"))
+}
 
 func generateHash(pubkey string) string {
 	h := sha3.NewShake256()
@@ -109,6 +124,14 @@ func generateHash(pubkey string) string {
 }
 
 func disconnect(hash string) {
+	usersMutex.Lock()
+	user, exists := users[hash]
+	usersMutex.Unlock()
+
+	if exists {
+		user.Conn.Close()
+	}
+
 	removeUser(hash)
 }
 
@@ -195,6 +218,12 @@ func printCachedMessages(term *term.Terminal) {
 		term.Write([]byte(e.Value.(string) + "\r\n"))
 	}
 }
+func printMOTD(motd string, term *term.Terminal) {
+	if motd != "" {
+		term.Write([]byte(motd + "\r\n"))
+	}
+
+}
 
 func configureSSHServer(privateKeyPath string) (*ssh.ServerConfig, error) {
 	privateKeyBytes, err := os.ReadFile(privateKeyPath)
@@ -273,6 +302,34 @@ func sendMessage(senderHash, recipientHash, message string, term *term.Terminal)
 	term.Write([]byte(message))
 }
 
+func loadMOTD(motdFilePath string) string {
+
+	var motdMessage string
+	file, err := os.Open(motdFilePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			os.Create(motdFilePath)
+			if err != nil {
+				log.Println("we weren't able to create it either: " + err.Error())
+				return ""
+			}
+			log.Println("motd didn't exist: " + err.Error())
+			return ""
+		}
+		log.Println("error opening motdFilePath: " + err.Error())
+		return ""
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "#") {
+			motdMessage += line + "\n"
+		}
+	}
+
+	return motdMessage
+}
 func handleConnection(db *sqlx.DB, channel ssh.Channel, sshConn *ssh.ServerConn, requests <-chan *ssh.Request) {
 	defer channel.Close()
 	if sshConn.Permissions == nil || sshConn.Permissions.Extensions == nil {
@@ -284,17 +341,14 @@ func handleConnection(db *sqlx.DB, channel ssh.Channel, sshConn *ssh.ServerConn,
 		fmt.Fprintln(channel, "Unable to retrieve your public key.")
 		return
 	}
-makeUsername:
-	hash, err := cleanString(generateHash(pubkey))
-	if err != nil {
-		goto makeUsername // yolo, im not sorry for using goto
-	}
-	hash = "@" + hash
+	hash := formatUsernameFromPubkey(pubkey)
 	addUser(hash, &user{Pubkey: pubkey, Hash: hash, Conn: channel})
 	term := term.NewTerminal(channel, "\r\n> ")
 	welcome := welcomeMessageAscii()
-	printCachedMessages(term)
+
 	term.Write([]byte(welcome))
+	printMOTD(loadMOTD(motdFilePath), term)
+	printCachedMessages(term)
 	term.Write([]byte("\nWelcome :) You are " + hash))
 	for {
 		input, err := term.ReadLine()
@@ -354,7 +408,19 @@ makeUsername:
 			postNumber := addDiscussion(db, hash, parts[1])
 			term.Write([]byte(fmt.Sprintf("Posted new discussion with post number %d.\n", postNumber)))
 		} else if strings.HasPrefix(input, "/list") {
-			listDiscussions(db, term)
+
+		} else if strings.HasPrefix(input, "/quit") {
+			disconnect(hash)
+		} else if strings.HasPrefix(input, "/q") {
+			disconnect(hash)
+		} else if strings.HasPrefix(input, "/exit") {
+			disconnect(hash)
+		} else if strings.HasPrefix(input, "/x") {
+			disconnect(hash)
+		} else if strings.HasPrefix(input, "/leave") {
+			disconnect(hash)
+		} else if strings.HasPrefix(input, "/part") {
+			disconnect(hash)
 		} else if strings.HasPrefix(input, "/replies") {
 			parts := strings.SplitN(input, " ", 2)
 			if len(parts) < 2 {
@@ -386,12 +452,25 @@ makeUsername:
 				term.Write([]byte("Reply successfully added to post.\n"))
 			}
 		} else {
-			message := fmt.Sprintf("[%s]: %s", hash, input)
-			if len(input) > 0 || !strings.HasPrefix(input, "/") {
-				broadcast(message + "\r")
+			if len(input) > 0 {
+				if strings.HasPrefix(input, "/") {
+					term.Write([]byte("Unrecognized command. Type /help for available commands.\n"))
+				} else {
+					message := fmt.Sprintf("[%s]: %s", hash, input)
+					broadcast(message + "\r")
+				}
 			}
 		}
 	}
+}
+
+func formatUsernameFromPubkey(pubkey string) string {
+	hash, err := cleanString(generateHash(pubkey))
+	if err != nil {
+		log.Println("error generating username: ", err)
+	}
+	hash = "@" + hash
+	return hash
 }
 
 func welcomeMessageAscii() string {
