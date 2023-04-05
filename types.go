@@ -10,7 +10,7 @@ import (
 var users = make(map[string]*user)
 var usersMutex sync.Mutex
 var messageCache *list.List
-var semverInfo = "v0.3.0"
+var semverInfo = "v0.3.1"
 var motdFilePath = "./general-motd.txt"
 
 type user struct {

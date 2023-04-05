@@ -11,8 +11,10 @@ import (
 	"log"
 	"net"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/jmoiron/sqlx"
@@ -104,15 +106,23 @@ func main() {
 		}(conn)
 	}
 }
-func clearScreen(term *term.Terminal) {
-	term.Write([]byte("\033[2J"))
-	term.Write([]byte("\033[H"))
+
+func saveCursorPos(channel ssh.Channel) {
+	writeString(channel, "\033[s")
 }
-func saveCursorPosition(term *term.Terminal) {
-	term.Write([]byte("\033[s"))
+
+func restoreCursorPos(channel ssh.Channel) {
+	writeString(channel, "\033[u")
 }
-func restoreCursorPosition(term *term.Terminal) {
-	term.Write([]byte("\033[u"))
+
+func moveCursorUp(channel ssh.Channel, n int) {
+	writeString(channel, fmt.Sprintf("\033[%dA", n))
+}
+func moveCursorDown(w io.Writer, lines int) {
+	fmt.Fprintf(w, "\033[%dB", lines)
+}
+func writeString(channel ssh.Channel, s string) {
+	channel.Write([]byte(s))
 }
 
 func generateHash(pubkey string) string {
@@ -134,16 +144,17 @@ func disconnect(hash string) {
 
 	removeUser(hash)
 }
-
 func broadcast(message string) {
 	addToCache(message)
 	log.Println("msg len: ", len(message))
 	log.Println("msg txt: ", message)
-	sender := message[1:9]
 	for _, user := range getAllUsers() {
-		if _, ignored := user.Ignored[sender]; !ignored {
-			fmt.Fprintln(user.Conn, "\r\n"+message)
-		}
+		saveCursorPos(user.Conn)
+		moveCursorUp(user.Conn, 1)
+		fmt.Fprintln(user.Conn, message)
+		restoreCursorPos(user.Conn)
+		moveCursorDown(user.Conn, 1)
+		fmt.Fprint(user.Conn, "\n")
 	}
 }
 
@@ -170,17 +181,40 @@ func addReply(db *sqlx.DB, postNumber int, author, message string) bool {
 	return true
 
 }
+
 func listDiscussions(db *sqlx.DB, term *term.Terminal) {
-	var discussions []*discussion
-	err := db.Select(&discussions, "SELECT id, author, message FROM discussions")
+	var discussions []struct {
+		ID         int    `db:"id"`
+		Author     string `db:"author"`
+		Message    string `db:"message"`
+		ReplyCount int    `db:"reply_count"`
+	}
+	err := db.Select(&discussions, `
+		SELECT d.id, d.author, d.message, COUNT(r.id) as reply_count
+		FROM discussions d
+		LEFT JOIN replies r ON d.id = r.discussion_id
+		GROUP BY d.id
+	`)
 	if err != nil {
 		log.Printf("Error retrieving discussions: %v", err)
 		term.Write([]byte("Error retrieving discussions.\n"))
 		return
 	}
-	term.Write([]byte("Discussions:\n"))
+
+	// prestige zalgo of justice
+	sort.Slice(discussions, func(i, j int) bool {
+		weightID := 0.3
+		weightReplyCount := 0.7
+
+		scoreI := weightID*float64(discussions[i].ID) + weightReplyCount*float64(discussions[i].ReplyCount)
+		scoreJ := weightID*float64(discussions[j].ID) + weightReplyCount*float64(discussions[j].ReplyCount)
+
+		return scoreI > scoreJ
+	})
+
+	term.Write([]byte("Discussions:\n\n[id.] [💬replies] [topic]\n\n"))
 	for _, disc := range discussions {
-		term.Write([]byte(fmt.Sprintf("%d. [%s] %s\n", disc.ID, disc.Author, disc.Message)))
+		term.Write([]byte(fmt.Sprintf("%d. 💬%d [%s] %s\n", disc.ID, disc.ReplyCount, disc.Author, disc.Message)))
 	}
 }
 
@@ -297,7 +331,7 @@ func sendMessage(senderHash, recipientHash, message string, term *term.Terminal)
 	if recipient.Ignored[senderHash] {
 		return
 	}
-	message = "\r\n[DirectMessage][" + senderHash + "]> " + message + "\r\n"
+	message = "\r\n[DirectMessage][" + senderHash + "] " + message + "\r\n"
 	fmt.Fprintln(recipient.Conn, message)
 	term.Write([]byte(message))
 }
@@ -343,13 +377,19 @@ func handleConnection(db *sqlx.DB, channel ssh.Channel, sshConn *ssh.ServerConn,
 	}
 	hash := formatUsernameFromPubkey(pubkey)
 	addUser(hash, &user{Pubkey: pubkey, Hash: hash, Conn: channel})
-	term := term.NewTerminal(channel, "\r\n> ")
+
+	term := term.NewTerminal(channel, "")
+	term.SetPrompt("")
+	saveCursorPos(channel)
+
+	restoreCursorPos(channel)
+
 	welcome := welcomeMessageAscii()
 
 	term.Write([]byte(welcome))
 	printMOTD(loadMOTD(motdFilePath), term)
 	printCachedMessages(term)
-	term.Write([]byte("\nWelcome :) You are " + hash))
+	term.Write([]byte("\nWelcome :) You are " + hash + "\n"))
 	for {
 		input, err := term.ReadLine()
 		if err != nil {
@@ -382,12 +422,18 @@ func handleConnection(db *sqlx.DB, channel ssh.Channel, sshConn *ssh.ServerConn,
 			}
 		} else if strings.HasPrefix(input, "/help") {
 			writeHelpMenu(term)
+		} else if strings.HasPrefix(input, "/?") {
+			writeHelpMenu(term)
 		} else if strings.HasPrefix(input, "/license") {
 			writeLicenseProse(term)
 		} else if strings.HasPrefix(input, "/version") {
 			writeVersionInfo(term)
 		} else if strings.HasPrefix(input, "/users") {
 			writeUsersOnline(term)
+		} else if strings.HasPrefix(input, "/bulletin") {
+			printMOTD(motdFilePath, term)
+		} else if strings.HasPrefix(input, "/motd") {
+			printMOTD(motdFilePath, term)
 		} else if strings.HasPrefix(input, "/pubkey") {
 			term.Write([]byte("Your pubkey hash: " + hash + "\n"))
 		} else if strings.HasPrefix(input, "/message") {
@@ -408,7 +454,9 @@ func handleConnection(db *sqlx.DB, channel ssh.Channel, sshConn *ssh.ServerConn,
 			postNumber := addDiscussion(db, hash, parts[1])
 			term.Write([]byte(fmt.Sprintf("Posted new discussion with post number %d.\n", postNumber)))
 		} else if strings.HasPrefix(input, "/list") {
-
+			listDiscussions(db, term)
+		} else if strings.HasPrefix(input, "/history") {
+			printCachedMessages(term)
 		} else if strings.HasPrefix(input, "/quit") {
 			disconnect(hash)
 		} else if strings.HasPrefix(input, "/q") {
@@ -456,7 +504,7 @@ func handleConnection(db *sqlx.DB, channel ssh.Channel, sshConn *ssh.ServerConn,
 				if strings.HasPrefix(input, "/") {
 					term.Write([]byte("Unrecognized command. Type /help for available commands.\n"))
 				} else {
-					message := fmt.Sprintf("[%s]: %s", hash, input)
+					message := fmt.Sprintf("[%s] %s: %s", time.Now().String()[11:16], hash, input)
 					broadcast(message + "\r")
 				}
 			}
@@ -515,6 +563,12 @@ func writeHelpMenu(term *term.Terminal) {
 	/message <user hash> <body> 
 		- ex: /message @A1Gla593 hey there friend
 		- send a direct message to a user
+	/quit, /q, /exit, /x
+		- disconnect, exit, goodbye
+
+[Chat commands]
+	/history
+		- reloads the last 100 lines of chat history
 
 [Message Board]
 	/post <message>
@@ -534,7 +588,8 @@ func writeHelpMenu(term *term.Terminal) {
 		- display the license text for shhhbb 
 	/version
 		- display the shhhbb version information	
-	`))
+
+` + "\n"))
 }
 func writeLicenseProse(term *term.Terminal) {
 	term.Write([]byte(`

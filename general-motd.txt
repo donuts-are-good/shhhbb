@@ -1,0 +1,19 @@
+==============================================
+=  _             _  _        _    _         =
+= | |__   _   _ | || |  ___ | |_ (_) _ __   =
+= | '_ \ | | | || || | / _ \| __|| || '_ \  =
+= | |_) || |_| || || ||  __/| |_ | || | | | =
+= |_.__/  \__,_||_||_| \___| \__||_||_| |_| =
+==============================================
+
+Announcements:
+
+- check it out we have MOTD's now :D 
+- added /q, /quit, /x, /exit
+- added /?
+- added filtering for / commands in chat 
+- added /motd, /bulletin
+- fixed chat scrolling disrupting input
+- added /history to reload the last 100 chat lines 
+
+
