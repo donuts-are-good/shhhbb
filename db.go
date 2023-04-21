@@ -35,3 +35,9 @@ func initBoardSchema(db *sqlx.DB) {
 		log.Fatalln(err)
 	}
 }
+
+
+func createReply(db *sqlx.DB, postID int, authorHash string, replyBody string) error {
+	_, err := db.Exec("INSERT INTO replies (discussion_id, author, message) VALUES (?, ?, ?)", postID, authorHash, replyBody)
+	return err
+}

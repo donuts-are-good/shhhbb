@@ -69,5 +69,106 @@
       <pre>go build</pre>
       <p><b>4. Optional: </b> i made a thing that will compile the server for every cpu and os it is compatible with, which is about 30-40 platforms. if you're into that, it's a simple bash tool you can try here: <a href="https://github.com/donuts-are-good/release.sh">donuts-are-good/release.sh</a></p>
       <pre>./release.sh --name "shhhbb" --version "v0.0.2" </pre>
-      </body>
+      
+      <h3 id="api">api</h3>
+      <p>the api is designed to allow users to create and retrieve chat messages and posts. it is secured with token-based authentication using bearer tokens.</p>
+      <h3 id="base-url">base url</h3>
+      <p><a href="http://localhost:8080">http://localhost:8080</a></p>
+      <h3 id="authentication">authentication</h3>
+      <p>all endpoints require authentication with a bearer token. to obtain a bearer token, the user must first log in and then authenticate themselves with their token in subsequent requests.</p>
+      <pre><code>/<span class="hljs-built_in">token</span> <span class="hljs-keyword">new</span>
+      /<span class="hljs-built_in">token</span> list
+      /<span class="hljs-built_in">token</span> revoke
+      </code></pre><h3 id="endpoints">endpoints</h3>
+      <p><strong>get /chat/messages</strong>
+      <em>retrieve the last 100 chat messages.</em></p>
+      <ul>
+      <li>parameters: none</li>
+      <li>authentication: bearer token required</li>
+      <li>response: a json object with a boolean success field and an array data field containing objects with the following properties:<ul>
+      <li>sender: the hash of the message sender</li>
+      <li>message: the message body</li>
+      <li>timestamp: the time the message was sent in iso 8601 format</li>
+      </ul>
+      </li>
+      </ul>
+      <p><strong>post /chat/create</strong>
+      <em>create a new chat message.</em></p>
+      <ul>
+      <li>parameters:<ul>
+      <li>sender_hash: the hash of the message sender</li>
+      <li>message: the message body</li>
+      </ul>
+      </li>
+      <li>authentication: bearer token required</li>
+      <li>response: a json object with a boolean success field</li>
+      </ul>
+      <p><strong>post /chat/direct/create</strong>
+      <em>create a new direct message.</em></p>
+      <ul>
+      <li>parameters:<ul>
+      <li>sender: the hash of the message sender</li>
+      <li>recipient: the hash of the message recipient</li>
+      <li>message: the message body</li>
+      </ul>
+      </li>
+      <li>authentication: bearer token required</li>
+      <li>response: a json object with a boolean success field</li>
+      </ul>
+      <p><strong>get /posts/list</strong>
+      <em>retrieve a list of posts.</em></p>
+      <ul>
+      <li>parameters: none</li>
+      <li>authentication: bearer token required</li>
+      <li>response: a json object with a boolean success field and an array data field containing objects with the following properties:<ul>
+      <li>post_id: the id of the post</li>
+      <li>author_hash: the hash of the post author</li>
+      <li>post_body: the post body</li>
+      <li>timestamp: the time the post was created in iso 8601 format</li>
+      </ul>
+      </li>
+      </ul>
+      <p><strong>post /posts/create</strong>
+      <em>create a new post.</em></p>
+      <ul>
+      <li>parameters:<ul>
+      <li>author_hash: the hash of the post author</li>
+      <li>post_body: the post body</li>
+      </ul>
+      </li>
+      <li>authentication: bearer token required</li>
+      <li>response: a json object with a boolean success field</li>
+      </ul>
+      <p><strong>get /posts/replies</strong>
+      <em>retrieve a list of replies to a post.</em></p>
+      <ul>
+      <li>parameters:<ul>
+      <li>post_id: the id of the post to retrieve replies for</li>
+      </ul>
+      </li>
+      <li>authentication: bearer token required</li>
+      <li>response: a json object with a boolean success field and an array data field containing objects with the following properties:<ul>
+      <li>reply_id: the id of the reply</li>
+      <li>post_id: the id of the post being replied to</li>
+      <li>author_hash: the hash of the reply author</li>
+      <li>reply_body: the reply body</li>
+      <li>timestamp: the time the reply was created in iso 8601 format</li>
+      </ul>
+      </li>
+      </ul>
+      <p><strong>post /posts/reply</strong>
+      <em>create a new reply to a post.</em></p>
+      <ul>
+      <li>parameters:<ul>
+      <li>post_id: the id of the post being replied to</li>
+      <li>author_hash: the hash of the reply author</li>
+      <li>reply_body: the reply body</li>
+      </ul>
+      </li>
+      <li>authentication: bearer token required</li>
+      <li>response: a json object with a boolean success field</li>
+      </ul>
+      
+    
+    </body>
       </html>

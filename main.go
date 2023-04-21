@@ -28,17 +28,17 @@ func init() {
 	messageCache = list.New()
 }
 func main() {
-	whitelist, err := loadPubkeyList("whitelist.txt")
-	if err != nil {
-		log.Printf("Error loading whitelist: %v", err)
-		return
-	}
+	// whitelist, err := loadPubkeyList("whitelist.txt")
+	// if err != nil {
+	// 	log.Printf("Error loading whitelist: %v", err)
+	// 	return
+	// }
 
-	blacklist, err := loadPubkeyList("blacklist.txt")
-	if err != nil {
-		log.Printf("Error loading blacklist: %v", err)
-		return
-	}
+	// blacklist, err := loadPubkeyList("blacklist.txt")
+	// if err != nil {
+	// 	log.Printf("Error loading blacklist: %v", err)
+	// 	return
+	// }
 
 	db := initSqliteDB()
 	if db == nil {
@@ -77,6 +77,9 @@ func main() {
 	}
 	defer listener.Close()
 	fmt.Println("Listening on :" + os.Args[1])
+
+	go api(db)
+
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -102,13 +105,15 @@ func main() {
 					fmt.Println("Error accepting channel:", err.Error())
 					return
 				}
-				go handleConnection(db, channel, sshConn, requests, whitelist, blacklist)
+				// go handleConnection(db, channel, sshConn, requests, whitelist, blacklist)
+				go handleConnection(db, channel, sshConn, requests)
 			}
 		}(conn)
 	}
 }
 
-func handleConnection(db *sqlx.DB, channel ssh.Channel, sshConn *ssh.ServerConn, requests <-chan *ssh.Request, whitelist map[string]bool, blacklist map[string]bool) {
+// func handleConnection(db *sqlx.DB, channel ssh.Channel, sshConn *ssh.ServerConn, requests <-chan *ssh.Request, whitelist map[string]bool, blacklist map[string]bool) {
+func handleConnection(db *sqlx.DB, channel ssh.Channel, sshConn *ssh.ServerConn, requests <-chan *ssh.Request) {
 	defer channel.Close()
 	if sshConn.Permissions == nil || sshConn.Permissions.Extensions == nil {
 		fmt.Fprintln(channel, "Unable to retrieve your public key.")
@@ -121,17 +126,17 @@ func handleConnection(db *sqlx.DB, channel ssh.Channel, sshConn *ssh.ServerConn,
 	}
 	hash := formatUsernameFromPubkey(pubkey)
 
-	if _, ok := whitelist[hash]; !ok {
-		fmt.Fprintln(channel, "You are not authorized to connect to this server.")
-		disconnect(hash)
-		return
-	}
+	// if _, ok := whitelist[hash]; !ok {
+	// 	fmt.Fprintln(channel, "You are not authorized to connect to this server.")
+	// 	disconnect(hash)
+	// 	return
+	// }
 
-	if _, ok := blacklist[hash]; ok {
-		fmt.Fprintln(channel, "You have been banned from this server.")
-		disconnect(hash)
-		return
-	}
+	// if _, ok := blacklist[hash]; ok {
+	// 	fmt.Fprintln(channel, "You have been banned from this server.")
+	// 	disconnect(hash)
+	// 	return
+	// }
 
 	addUser(hash, &user{Pubkey: pubkey, Hash: hash, Conn: channel})
 
@@ -181,6 +186,12 @@ func handleConnection(db *sqlx.DB, channel ssh.Channel, sshConn *ssh.ServerConn,
 			listDiscussions(db, term)
 		case strings.HasPrefix(input, "/history"):
 			printCachedMessages(term)
+		case strings.HasPrefix(input, "/tokens new"):
+			handleTokenNew(db, term, hash)
+		case strings.HasPrefix(input, "/tokens list"):
+			handleTokenList(db, term, hash)
+		case strings.HasPrefix(input, "/tokens revoke"):
+			handleTokenRevoke(db, input, term, hash)
 		case strings.HasPrefix(input, "/quit") || strings.HasPrefix(input, "/q") ||
 			strings.HasPrefix(input, "/exit") || strings.HasPrefix(input, "/x") ||
 			strings.HasPrefix(input, "/leave") || strings.HasPrefix(input, "/part"):
@@ -195,33 +206,34 @@ func handleConnection(db *sqlx.DB, channel ssh.Channel, sshConn *ssh.ServerConn,
 					term.Write([]byte("Unrecognized command. Type /help for available commands.\n"))
 				} else {
 					message := fmt.Sprintf("[%s] %s: %s", time.Now().String()[11:16], hash, input)
-					broadcast(message + "\r")
+					broadcast(hash, message+"\r")
 				}
 			}
 		}
 	}
 }
-func loadPubkeyList(filename string) (map[string]bool, error) {
-	file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0644)
-	if err != nil {
-		return nil, fmt.Errorf("unable to open %s: %v", filename, err)
-	}
-	defer file.Close()
 
-	pubkeyList := make(map[string]bool)
+// func loadPubkeyList(filename string) (map[string]bool, error) {
+// 	file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0644)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("unable to open %s: %v", filename, err)
+// 	}
+// 	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		pubkey := scanner.Text()
-		pubkeyList[pubkey] = true
-	}
+// 	pubkeyList := make(map[string]bool)
 
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("error reading %s: %v", filename, err)
-	}
+// 	scanner := bufio.NewScanner(file)
+// 	for scanner.Scan() {
+// 		pubkey := scanner.Text()
+// 		pubkeyList[pubkey] = true
+// 	}
 
-	return pubkeyList, nil
-}
+// 	if err := scanner.Err(); err != nil {
+// 		return nil, fmt.Errorf("error reading %s: %v", filename, err)
+// 	}
+
+// 	return pubkeyList, nil
+// }
 
 func saveCursorPos(channel ssh.Channel) {
 	writeString(channel, "\033[s")
@@ -261,9 +273,12 @@ func disconnect(hash string) {
 	removeUser(hash)
 }
 
-func broadcast(message string) {
+func broadcast(senderHash, message string) {
 	addToCache(message)
 	for _, user := range getAllUsers() {
+		if user.Hash == senderHash {
+			continue
+		}
 		saveCursorPos(user.Conn)
 		moveCursorUp(user.Conn, 1)
 		fmt.Fprintln(user.Conn, message)
@@ -636,12 +651,20 @@ func writeHelpMenu(term *term.Terminal) {
 		- ex: /reply 1 hello everyone
 		- reply to a discussion
 
+[API Commands]
+	/tokens new
+		- create a new shhhbb API token 
+	/tokens list
+		- view your shhhbb API tokens
+	/tokens revoke <token>
+		- revoke an shhhbb API token
+
 [Misc. Commands]
 	/license
 		- display the license text for shhhbb 
 	/version
 		- display the shhhbb version information	
-
+	
 ` + "\n"))
 }
 func writeLicenseProse(term *term.Terminal) {
@@ -663,12 +686,12 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-	`))
+`))
 }
 func writeVersionInfo(term *term.Terminal) {
 	term.Write([]byte(`
-	shhhbb bbs ` + semverInfo + `
-	MIT License 2023 donuts-are-good
-	https://github.com/donuts-are-good/shhhbb
-	`))
+shhhbb bbs ` + semverInfo + `
+MIT License 2023 donuts-are-good
+https://github.com/donuts-are-good/shhhbb
+`))
 }

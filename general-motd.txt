@@ -8,6 +8,18 @@
 
 Announcements:
 
+v0.4.0
+- test server is up! `ssh -p 2224 shhhbb.com`
+  - api comments: https://github.com/donuts-are-good/shhhbb/issues/8
+- added API auth tokens
+  - tokens List
+  - tokens new
+  - tokens revoke 
+- added api 
+  - api has chat
+  - api has board discussions 
+
+v0.3.1
 - check it out we have MOTD's now :D 
 - added /q, /quit, /x, /exit
 - added /?
