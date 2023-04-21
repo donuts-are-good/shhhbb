@@ -48,16 +48,6 @@ func main() {
 	defer db.Close()
 	initBoardSchema(db)
 
-	adminDB := initAdminDB()
-	if adminDB == nil {
-		log.Println("couldn't load admin db")
-		return
-	}
-	defer adminDB.Close()
-	initAdminSchema(adminDB)
-
-	go adminAPI()
-
 	var privateKeyPath string
 	flag.StringVar(&privateKeyPath, "key", "./keys/ssh_host_ed25519_key", "Path to the private key")
 	flag.Parse()
@@ -175,9 +165,6 @@ func handleConnection(db *sqlx.DB, channel ssh.Channel, sshConn *ssh.ServerConn,
 			writeHelpMenu(term)
 		case strings.HasPrefix(input, "/license"):
 			writeLicenseProse(term)
-		// case strings.HasPrefix(input, "/name") || strings.HasPrefix(input, "/nick"):
-		// 	parts := strings.Split(input, " ")
-		// 	handleName(term, hash, parts)
 		case strings.HasPrefix(input, "/version"):
 			writeVersionInfo(term)
 		case strings.HasPrefix(input, "/users"):
@@ -236,95 +223,6 @@ func loadPubkeyList(filename string) (map[string]bool, error) {
 	return pubkeyList, nil
 }
 
-// func handleConnection(db *sqlx.DB, channel ssh.Channel, sshConn *ssh.ServerConn, requests <-chan *ssh.Request) {
-// 	defer channel.Close()
-// 	if sshConn.Permissions == nil || sshConn.Permissions.Extensions == nil {
-// 		fmt.Fprintln(channel, "Unable to retrieve your public key.")
-// 		return
-// 	}
-// 	pubkey, ok := sshConn.Permissions.Extensions["pubkey"]
-// 	if !ok {
-// 		fmt.Fprintln(channel, "Unable to retrieve your public key.")
-// 		return
-// 	}
-// 	hash := formatUsernameFromPubkey(pubkey)
-// 	addUser(hash, &user{Pubkey: pubkey, Hash: hash, Conn: channel})
-
-// 	term := term.NewTerminal(channel, "")
-// 	term.SetPrompt("")
-// 	saveCursorPos(channel)
-
-// 	restoreCursorPos(channel)
-
-// 	welcome := welcomeMessageAscii()
-
-//		term.Write([]byte(welcome))
-//		printMOTD(loadMOTD(motdFilePath), term)
-//		printCachedMessages(term)
-//		term.Write([]byte("\nWelcome :) You are " + hash + "\n"))
-//		for {
-//			input, err := term.ReadLine()
-//			if err != nil {
-//				if err == io.EOF {
-//					disconnect(hash)
-//					return
-//				}
-//				readlineErrCheck(term, err, hash)
-//				return
-//			} else if strings.HasPrefix(input, "/ignore") {
-//				handleIgnore(input, term, hash)
-//			} else if strings.HasPrefix(input, "/help") {
-//				writeHelpMenu(term)
-//			} else if strings.HasPrefix(input, "/?") {
-//				writeHelpMenu(term)
-//			} else if strings.HasPrefix(input, "/license") {
-//				writeLicenseProse(term)
-//			} else if strings.HasPrefix(input, "/version") {
-//				writeVersionInfo(term)
-//			} else if strings.HasPrefix(input, "/users") {
-//				writeUsersOnline(term)
-//			} else if strings.HasPrefix(input, "/bulletin") {
-//				printMOTD(motdFilePath, term)
-//			} else if strings.HasPrefix(input, "/motd") {
-//				printMOTD(motdFilePath, term)
-//			} else if strings.HasPrefix(input, "/pubkey") {
-//				term.Write([]byte("Your pubkey hash: " + hash + "\n"))
-//			} else if strings.HasPrefix(input, "/message") {
-//				handleMEssage(input, term, hash)
-//			} else if strings.HasPrefix(input, "/post") {
-//				handlePost(input, term, db, hash)
-//			} else if strings.HasPrefix(input, "/list") {
-//				listDiscussions(db, term)
-//			} else if strings.HasPrefix(input, "/history") {
-//				printCachedMessages(term)
-//			} else if strings.HasPrefix(input, "/quit") {
-//				disconnect(hash)
-//			} else if strings.HasPrefix(input, "/q") {
-//				disconnect(hash)
-//			} else if strings.HasPrefix(input, "/exit") {
-//				disconnect(hash)
-//			} else if strings.HasPrefix(input, "/x") {
-//				disconnect(hash)
-//			} else if strings.HasPrefix(input, "/leave") {
-//				disconnect(hash)
-//			} else if strings.HasPrefix(input, "/part") {
-//				disconnect(hash)
-//			} else if strings.HasPrefix(input, "/replies") {
-//				handleReplies(input, term, db)
-//			} else if strings.HasPrefix(input, "/reply") {
-//				handleReply(input, term, db, hash)
-//			} else {
-//				if len(input) > 0 {
-//					if strings.HasPrefix(input, "/") {
-//						term.Write([]byte("Unrecognized command. Type /help for available commands.\n"))
-//					} else {
-//						message := fmt.Sprintf("[%s] %s: %s", time.Now().String()[11:16], hash, input)
-//						broadcast(message + "\r")
-//					}
-//				}
-//			}
-//		}
-//	}
 func saveCursorPos(channel ssh.Channel) {
 	writeString(channel, "\033[s")
 }
@@ -365,8 +263,6 @@ func disconnect(hash string) {
 
 func broadcast(message string) {
 	addToCache(message)
-	log.Println("msg len: ", len(message))
-	log.Println("msg txt: ", message)
 	for _, user := range getAllUsers() {
 		saveCursorPos(user.Conn)
 		moveCursorUp(user.Conn, 1)
@@ -425,7 +321,6 @@ func listDiscussions(db *sqlx.DB, term *term.Terminal) {
 		return
 	}
 
-	// prestige zalgo of justice
 	sort.Slice(discussions, func(i, j int) bool {
 		weightID := 0.3
 		weightReplyCount := 0.7
@@ -669,37 +564,6 @@ func handleMessage(input string, term *term.Terminal, hash string) {
 		sendMessage(hash, recipientHash, message, term)
 	}
 }
-
-// func handleName(term *term.Terminal, hash string, parts []string) {
-// 	if len(parts) < 2 {
-// 		term.Write([]byte("Usage: /name <new name>\n"))
-// 		return
-// 	}
-// 	newName := parts[1]
-// 	oldName := hash
-// 	newHash := "@" + newName
-// 	addUser(newHash, &user{Pubkey: "", Hash: newHash, Conn: nil})
-// 	moveUser(oldName, newHash)
-// 	term.Write([]byte("Your name has been updated to " + newName + "\n"))
-// 	broadcast("User with hash " + oldName + " changed name to " + newName)
-// 	fmt.Println("User with hash", oldName, "changed name to", newName)
-// }
-
-// func moveUser(oldName string, newHash string) {
-// 	usersMutex.Lock()
-// 	user := users[oldName]
-// 	if user == nil {
-// 		log.Printf("moveUser: user with hash %v not found\n", oldName)
-// 		usersMutex.Unlock()
-// 		return
-// 	}
-// 	user.Hash = newHash
-// 	user.Conn = nil
-// 	delete(users, oldName)
-// 	users[newHash] = user
-// 	log.Printf("moveUser: user with hash %v moved to %v\n", oldName, newHash)
-// 	usersMutex.Unlock()
-// }
 
 func formatUsernameFromPubkey(pubkey string) string {
 	hash, err := cleanString(generateHash(pubkey))
