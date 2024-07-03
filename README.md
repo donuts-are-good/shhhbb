@@ -11,7 +11,6 @@ ssh based BBS & chat over SSH
 
 ![demo video link](https://user-images.githubusercontent.com/96031819/225815939-1e7c5837-30c9-4d5b-938e-4dcb1b710401.mp4)
 
-**try it**: `ssh -p 2223 shhhbb.com`
 
 
 **instructions:** 
@@ -19,8 +18,6 @@ ssh based BBS & chat over SSH
 2. generate an ed25519 keypair in there without password
 `ssh-keygen -t ed25519 -C "my cool keypair" -f ./keys/ssh_host_ed25519_key`
 3. launch with `./shhhbb 2223` where `2223` is the port
-
-connect with `ssh -o "ForwardAgent=no" -o "IdentitiesOnly=yes" -p 2223 shhhbb.com` where shhhbb.com is your domain or ip
 
 ## api 
 
