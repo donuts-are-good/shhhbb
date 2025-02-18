@@ -40,6 +40,8 @@ func main() {
 	// 	return
 	// }
 
+	var pvar = 1
+
 	db := initSqliteDB()
 	if db == nil {
 		log.Panic("couldn't load main db")
@@ -60,9 +62,12 @@ func main() {
 		return
 	}
 	users = make(map[string]*user)
-	if len(os.Args) != 2 {
-		fmt.Printf("Usage: %s <port>\n", os.Args[0])
+	if len(os.Args) <= 2 {
+		fmt.Printf("Usage: %s [ -key /path/to/ed25519key ] <port>\n", os.Args[0])
 		return
+	}
+	if len(os.Args) > 2 {
+		pvar = len(os.Args) - 1
 	}
 	config, err := configureSSHServer(privateKeyPath)
 	if err != nil {
@@ -70,13 +75,13 @@ func main() {
 		return
 	}
 
-	listener, err := net.Listen("tcp", ":"+os.Args[1])
+	listener, err := net.Listen("tcp", ":"+os.Args[pvar])
 	if err != nil {
 		fmt.Println("Error listening:", err.Error())
 		return
 	}
 	defer listener.Close()
-	fmt.Println("Listening on :" + os.Args[1])
+	fmt.Println("Listening on :" + os.Args[pvar])
 
 	go api(db)
 
